@@ -1,0 +1,188 @@
+import pandas as pd
+import vitalsImpute as vi
+import labsImpute as lb
+import glucoseImpute as gl 
+import gasesImpute as ga 
+import numpy as np
+import InputData as input
+import dask.dataframe as dd
+#------------24 hours-------------#
+rows=20000
+# Blood gases data
+df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
+gases_columns = ['paco2', 'fio2', 'pao2']
+gases = ga.gasesImpute(df_bloodGases,gases_columns,24)
+df_gases=gases.prepareGases()
+print(df_bloodGases.info())
+
+
+# Glucose and creatinine data
+df_glucoCreat = dd.read_csv('/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv',  sep='|')
+
+print(df_glucoCreat.info())
+gl_columns = ["creatinine","glucose"]
+glucCreat = gl.glucoseImpute(df_glucoCreat,gl_columns,3600)
+glucCreat_df = glucCreat.prepareGlucose()
+print("Glucose and creatine df after optimization:")
+print(glucCreat_df.info())
+# imputed_gluc = glucCreat.imputeGlucose(glucCreat_df,3600,gl_columns)
+# print(imputed_gluc.info())
+# read the patient vitals nrows=50000,
+# Vitals data
+df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|',
+                             dtype={"gcs_time": "object"}).head(n=rows)
+print (df_vitals.info(memory_usage='deep'))
+
+checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
+time_interval=15 
+# 2. Create the imputer object 
+imputer = vi.vitalsImpute(df_vitals,checking_columns,time_interval)  # pass a copy to keep df_vitals unchanged
+
+#Delete initial dataframes to gain memory
+del df_glucoCreat
+del df_bloodGases
+del df_vitals
+
+# 3. Prepare and impute the data
+clean_df = imputer.prepareVitals()
+
+# print('final vitals info after normalization:')
+# print(clean_df.info())
+exit()
+#-------Blood lab results preparation-------#
+df_bloodResults = pd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')
+lab_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+time_interval = 3600
+
+print('initial labs info before normalization:')
+print(df_bloodResults.info())
+
+labResult = lb.labsImpute(df_bloodResults,glucCreat_df,lab_columns,gl_columns,time_interval)
+
+#Delete initial blood dataframe to gain memory
+del df_bloodResults
+bloodResults = labResult.prepareLabs()
+
+exit()
+#merge vitals and blood
+df_vitals_blood = input.mergeDataframes(bloodResults, lab_columns, glucCreat_df, gl_columns, clean_df,df_gases,gases_columns)
+print('final dataset df_vitals_blooexitd:')
+print(df_vitals_blood.info())     
+print(df_vitals_blood.head()) 
+#delete blood result object in order to free memory
+del bloodResults
+#Create another object with df_vitals_blood and fill blood features
+labImputer = lb.labsImpute(df_vitals_blood,glucCreat_df,lab_columns,gl_columns,time_interval)
+df_final_dataset = labImputer.populateLabResults(gases_columns)
+
+
+
+ 
+# 4. Evaluate imputation quality across all vitals
+# eval_results = imputer.evaluate_all_vitals(clean_df, [
+#     "spo2", "sbp", "dbp", "mbp", "heart_rate", "pulse_pressure", "resp_rate", "temperature"
+# ])
+
+# # 5. Display results
+# print(eval_results)
+
+# Plot both MAE and RMSE
+#imputer.plot_imputation_accuracy(eval_results, metrics=["MAE", "RMSE"])
+
+ 
+print('final dataset  to be used in lstm etc')
+print(df_final_dataset.info())
+print(df_final_dataset.head())
+df_final_dataset.to_csv("final_for_lstm_20250715.csv", sep="|", index=False)
+print('final dataset  to be used in lstm etc')
+exit()
+
+
+#df_bloodGases.drop(['admittime','rdwsd','hadm_id'], axis=1, inplace=True)
+
+#------------12 hours-------------#
+
+#read the patient vitals nrows=50000,
+# df_vitals = pd.read_csv('/root/scripts/new_data/12hours/vitals_12_hours.csv',     sep='|')
+
+# df_vitals.drop(['icu_intime','icu_outtime','gcs_time'], axis=1, inplace=True)
+
+# #read the patient glucose and creatine
+# df_glucoCreat = pd.read_csv('/root/scripts/new_data/12hours/glucose_creatine_12_hours.csv', sep='|')
+# df_glucoCreat.drop(['hadm_id'], axis=1, inplace=True)
+# df_examsBg = pd.read_csv('/root/scripts/new_data/12hours/blood_12_hours.csv', sep='|')
+# df_examsBg.drop(['admittime','rdwsd','hadm_id'], axis=1, inplace=True)
+
+
+#read output-new.csv (This is the ouput data)
+df_output = pd.read_csv('/root/scripts/new_data/patients_sepsis3.csv', sep='|' )
+
+
+
+clean_df = normalized.dropna(subset=columns_to_fill + columns_to_fill_2).copy()
+
+####### Evaluation section #######
+
+eval_results = evaluation.evaluation (clean_df, columns_to_fill,columns_to_fill_2)
+
+final_clean_df = eval_results.apply_medical_thresholds(clean_df, medical_thresholds)
+
+final_clean_df2=final_clean_df.dropna()
+# print(final_df.info())
+
+# vital_interpolation_results = eval_results.simulate_and_evaluate_interpolation(final_clean_df2, columns_to_fill, 0.2, 5)
+# print("\n🩺 Vitals - Interpolation Performance")
+# print(vital_interpolation_results.sort_values(by="MAE"))
+
+n_groups = final_clean_df.groupby(["subject_id", "stay_id", "group"]).ngroups
+print(f"Number of groups: {n_groups}")
+#print(filled[['stay_id','gender','charttime','spo2', 'sbp', 'pulse_pressure', 'mbp', 'heart_rate', 'resp_rate','temperature','gcs','gcs_calc','dbp']])
+final_clean_df.to_csv("final_for_lstm_withsepsis.csv", sep="|", index=False)
+
+exit()
+#feature columns for lstm
+features = ['gender','admission_age','hospstay_seq','los_hospital','hospstay_seq','los_icu','icustay_seq','spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature','gcs',"wbc","platelet","hematocrit","hemoglobin",
+            "mbp","mch","mchc","mcv","rbc","rdw","glucose","creatinine"]
+features_2 = ['spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature']
+features_3 = ['gender','admission_age','hospstay_seq','los_hospital','hospstay_seq','los_icu','icustay_seq','spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature','gcs','hemoglobin']
+
+# missing_rows = merged_data[merged_data['spo2'].isna()]
+# print(missing_rows)
+
+
+input_size= len(features)
+hidden_size=64
+num_layers=3
+#create the LSTM model
+lstm = LSTMClass(input_size,hidden_size,num_layers)
+
+# Set sequence length and create sequences
+sequence_length = 30
+sequences = lstm.create_sequences(final_df, sequence_length,features)
+tensors = lstm.createTensors(sequences)
+
+X=tensors[0]
+y=tensors[1]
+# Split into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.7, random_state=42)
+
+
+batch_size = 32
+train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
+test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+criterion = nn.BCELoss()  # Binary Cross-Entropy Loss
+optimizer = optim.Adam(lstm.parameters(), lr=0.001)
+
+# Train the model
+lstm.trainLSTM(train_loader, criterion, optimizer, epochs=10)
+
+# Evaluate the model
+lstm.evaluateLSTM(test_loader, criterion)
+
+lstm.createPlotPredictions(test_loader)
+
+exit()

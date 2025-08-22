@@ -123,6 +123,8 @@ class vitalsImpute:
 
         def interpolate_partition(df):
             df = df.sort_values("charttime")
+            print("filling parquet ")
+            print(df.info)
             df[cols] = df[cols].ffill().bfill().interpolate(method="linear", limit_direction="both")
             return df
 

@@ -1,5 +1,5 @@
 import pandas as pd
-import vitalsImpute as vi
+import vitalsImputeNew as vi
 import labsImpute as lb
 import glucoseImpute as gl 
 import gasesImpute as ga 
@@ -7,36 +7,35 @@ import numpy as np
 import InputData as input
 import dask.dataframe as dd
 #------------24 hours-------------#
-rows=20000
+rows=100000
 # Blood gases data
 df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
 gases_columns = ['paco2', 'fio2', 'pao2']
 gases = ga.gasesImpute(df_bloodGases,gases_columns,24)
 df_gases=gases.prepareGases()
-print(df_bloodGases.info())
+
 
 
 # Glucose and creatinine data
 df_glucoCreat = dd.read_csv('/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv',  sep='|')
 
-print(df_glucoCreat.info())
+
 gl_columns = ["creatinine","glucose"]
 glucCreat = gl.glucoseImpute(df_glucoCreat,gl_columns,3600)
 glucCreat_df = glucCreat.prepareGlucose()
 print("Glucose and creatine df after optimization:")
-print(glucCreat_df.info())
+
 # imputed_gluc = glucCreat.imputeGlucose(glucCreat_df,3600,gl_columns)
 # print(imputed_gluc.info())
 # read the patient vitals nrows=50000,
 # Vitals data
-df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|',
-                             dtype={"gcs_time": "object"}).head(n=rows)
+df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 print (df_vitals.info(memory_usage='deep'))
 
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 time_interval=15 
 # 2. Create the imputer object 
-imputer = vi.vitalsImpute(df_vitals,checking_columns,time_interval)  # pass a copy to keep df_vitals unchanged
+imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval)  # pass a copy to keep df_vitals unchanged
 
 #Delete initial dataframes to gain memory
 del df_glucoCreat
@@ -46,8 +45,8 @@ del df_vitals
 # 3. Prepare and impute the data
 clean_df = imputer.prepareVitals()
 
-# print('final vitals info after normalization:')
-# print(clean_df.info())
+print('final vitals info after normalization:')
+print(clean_df.meta())
 exit()
 #-------Blood lab results preparation-------#
 df_bloodResults = pd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')

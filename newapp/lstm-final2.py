@@ -30,7 +30,7 @@ print("Glucose and creatine df after optimization:")
 # read the patient vitals nrows=50000,
 # Vitals data
 df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
-print (df_vitals.info(memory_usage='deep'))
+df_vitals = df_vitals.set_index('stay_id', sorted=True)
 
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 time_interval=15 
@@ -46,7 +46,7 @@ del df_vitals
 clean_df = imputer.prepareVitals()
 
 print('final vitals info after normalization:')
-print(clean_df.meta())
+# print(clean_df.compute().info())
 exit()
 #-------Blood lab results preparation-------#
 df_bloodResults = pd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')

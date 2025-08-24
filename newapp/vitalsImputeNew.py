@@ -44,6 +44,8 @@ class vitalsImputeNew:
     @staticmethod
     def fillVitals_partition(df, vital_cols):
         # Sort charttime **within each stay_id**
+
+    
         df = df.groupby("stay_id", group_keys=False).apply(lambda g: g.sort_values("charttime"))
 
         # Fill missing values for numeric vital columns
@@ -53,6 +55,7 @@ class vitalsImputeNew:
             .ffill()
             .interpolate(method="linear", limit_direction="both")
         )
+
         return df
 
     def prepareVitals(self):
@@ -99,7 +102,7 @@ class vitalsImputeNew:
         })
 
         # Repartition to a reasonable number of partitions for 4 cores
-        self.vitals = self.vitals.repartition(npartitions=16)
+        self.vitals = self.vitals.repartition(npartitions=128)
 
         # Count NaNs before filling
         empties_before = self.vitals[self.checkingColumns].isna().sum().compute()
@@ -127,7 +130,7 @@ class vitalsImputeNew:
         # Total elapsed time
         elapsed = time.time() - start_time
         print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
-
+        self.vitals.to_csv("filled/vitals_filled-*.csv", single_file=False, index=False)
         return self.vitals
         
         # print("sorted_groups")

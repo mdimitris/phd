@@ -9,9 +9,9 @@ import dask.dataframe as dd
 from dask.distributed import Client
 
 # Start Dask client (4 cores)
-if __name__ == "__main__":
-    client = Client(n_workers=4, threads_per_worker=1, memory_limit="3GB")
-    print(client)  # Optional: view cluster info
+# if __name__ == "__main__":
+#     client = Client(n_workers=4, threads_per_worker=1, memory_limit="3GB")
+#     print(client)  # Optional: view cluster info
 
 #------------24 hours-------------#
 rows=100000

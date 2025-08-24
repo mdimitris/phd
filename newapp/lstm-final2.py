@@ -6,8 +6,27 @@ import gasesImpute as ga
 import numpy as np
 import InputData as input
 import dask.dataframe as dd
+from dask.distributed import Client
+
+# Start Dask client (4 cores)
+if __name__ == "__main__":
+    client = Client(n_workers=4, threads_per_worker=1, memory_limit="3GB")
+    print(client)  # Optional: view cluster info
+
 #------------24 hours-------------#
 rows=100000
+
+df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
+
+
+checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
+time_interval=15 
+# 2. Create the imputer object 
+imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 
+# 3. Prepare and impute the data
+clean_df = imputer.prepareVitals()
+exit()
+
 # Blood gases data
 df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
 gases_columns = ['paco2', 'fio2', 'pao2']
@@ -29,21 +48,15 @@ print("Glucose and creatine df after optimization:")
 # print(imputed_gluc.info())
 # read the patient vitals nrows=50000,
 # Vitals data
-df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
-df_vitals = df_vitals.set_index('stay_id', sorted=True)
+#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
-checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
-time_interval=15 
-# 2. Create the imputer object 
-imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval)  # pass a copy to keep df_vitals unchanged
 
 #Delete initial dataframes to gain memory
 del df_glucoCreat
 del df_bloodGases
 del df_vitals
 
-# 3. Prepare and impute the data
-clean_df = imputer.prepareVitals()
+
 
 print('final vitals info after normalization:')
 # print(clean_df.compute().info())

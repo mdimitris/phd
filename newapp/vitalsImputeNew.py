@@ -16,174 +16,150 @@ import dask.dataframe as dd
 import shutil
 
 
-
 class vitalsImputeNew:
-    
+
     def __init__(self, vitals,checkingColumns, interval):
-          self.vitals = vitals
-          self.checkingColumns = checkingColumns
-          self.interval = interval
-     
+        self.vitals = vitals
+        self.checkingColumns = checkingColumns
+        self.interval = interval
+
     def set_vitals(self, vitals):
         self.vitals = vitals
 
     def get_vitals(self):
         return self.vitals
-    
+
     def set_interval(self, interval):
         self.interval = interval
 
     def get_interval(self):
         return self.interval
-    
+
     def set_checkingColumns(self, checkingColumns):
         self.checkingColumns = checkingColumns
 
     def get_checkingColumns(self):
         return self.checkingColumns
-    
-    
-    def prepareVitals(self):
-        print('Optimizing dtypes and preprocessing...')
 
-        # Your dtypes conversion
+    @staticmethod
+    def fillVitals_partition(df, vital_cols):
+        # Sort charttime **within each stay_id**
+        df = df.groupby("stay_id", group_keys=False).apply(lambda g: g.sort_values("charttime"))
+
+        # Fill missing values for numeric vital columns
+        df[vital_cols] = (
+            df[vital_cols]
+            .bfill()
+            .ffill()
+            .interpolate(method="linear", limit_direction="both")
+        )
+        return df
+
+    def prepareVitals(self):
+        start_time = time.time()
+
+        # Convert to datetime
+        self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
+
+        # Create 15-min bins
+        self.vitals["time_bin"] = self.vitals["charttime"].dt.floor("15min")
+
+        # Set index (not sorted to avoid expensive operation)
+        self.vitals = self.vitals.set_index("charttime", sorted=False)
+
+        # Drop unnecessary columns
+        cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
+        self.vitals = self.vitals.drop(columns=cols_to_del, errors='ignore')
+
+        # Optimize datatypes
         self.vitals = self.vitals.astype({
             "subject_id": pd.Int32Dtype(),
             "stay_id": pd.Int32Dtype(),
-            # ... (all other dtypes)
+            "gender": pd.Int8Dtype(),
+            "hospstay_seq": pd.Int8Dtype(),
+            "icustay_seq": pd.Int8Dtype(),
+            "hospital_expire_flag": pd.Int8Dtype(),
+            "label_sepsis_within_6h": pd.Int8Dtype(),
+            "label_sepsis_within_8h": pd.Int8Dtype(),
+            "label_sepsis_within_12h": pd.Int8Dtype(),
+            "label_sepsis_within_24h": pd.Int8Dtype(),
+            "sepsis_label": pd.Int8Dtype(),
+            "heart_rate": pd.Float32Dtype(),
+            "resp_rate": pd.Float32Dtype(),
+            "sbp": pd.Float32Dtype(),
+            "dbp": pd.Float32Dtype(),
+            "mbp": pd.Float32Dtype(),
+            "spo2": pd.Float32Dtype(),
+            "pulse_pressure": pd.Float32Dtype(),
+            "temperature": pd.Float32Dtype(),
+            "admission_age": pd.Float32Dtype(),
+            "los_hospital": pd.Float32Dtype(),
+            "los_icu": pd.Float32Dtype(),
+            "hours_before_sepsis": pd.Float32Dtype(),
         })
 
-        self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
-        self.vitals = self.vitals.drop(columns=["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"], errors='ignore')
-        self.vitals = self.vitals.dropna(how='all', subset=self.checkingColumns)
+        # Repartition to a reasonable number of partitions for 4 cores
+        self.vitals = self.vitals.repartition(npartitions=16)
 
-        # 🚀 The Correct and Final Sequence: No Multi-Index
-        
-        # 1. Ensure a unique, default RangeIndex.
-        self.vitals = self.vitals.reset_index(drop=True)
+        # Count NaNs before filling
+        empties_before = self.vitals[self.checkingColumns].isna().sum().compute()
+        print("Empties before fill:")
+        print(empties_before)
 
-        # 2. Set the single-column index to `stay_id` and persist.
-        # This is a critical step that partitions and sorts the data by `stay_id`,
-        # placing all data for each stay in a single partition.
-        self.vitals = self.vitals.set_index("stay_id", sorted=True).persist()
-
-        # 3. Use `map_partitions` to perform time-series operations locally.
-        # The `map_partitions` method operates on each Dask partition (which is a Pandas DataFrame),
-        # where the data is already sorted by `stay_id`. Within each partition, we can
-        # perform a Pandas sort by `charttime` to handle the time-series logic correctly.
-        def _impute_and_transform_partition(df):
-            # We need to sort by charttime within each partition for `diff` and other time-series ops
-            # This is a local operation on a Pandas DataFrame, so it's efficient here.
-            df = df.sort_values(by="charttime")
-
-            # Now, you can use Pandas `groupby` and `transform` on the sorted local data.
-            df["relative_time_min"] = (df.groupby("stay_id")["charttime"]
-                                        .transform(lambda x: (x - x.min()).dt.total_seconds() / 60)
-                                        .fillna(0))
-            
-            df["time_gap_min"] = (df.groupby("stay_id")["charttime"]
-                                    .transform(lambda x: x.diff().dt.total_seconds() / 60)
-                                    .fillna(0))
-            
-            df["group"] = (df.groupby("stay_id")["charttime"]
-                            .transform(lambda x: (x.diff() > pd.Timedelta(minutes=self.interval)).cumsum()))
-            
-            # Finally, perform the imputation using `groupby().apply()` on the Pandas DataFrame.
-            # This is the most reliable way to handle ffill/bfill/interpolate with Dask.
-            df[self.checkingColumns] = df.groupby("stay_id")[self.checkingColumns].apply(
-                lambda group: group.ffill().bfill().interpolate(method="linear", limit_direction="both")
-            )
-            
-            return df
-
-        # Apply the partition function to the entire Dask DataFrame.
-        # We must provide `meta` to tell Dask the output types.
-        # Let's rebuild `meta` to include our new columns and ensure dtypes are correct.
-        meta = self.vitals.copy()._meta
-        meta["relative_time_min"] = pd.Series([], dtype="f4")
-        meta["time_gap_min"] = pd.Series([], dtype="f4")
-        meta["group"] = pd.Series([], dtype="i4")
-        
+        # Fill missing values using map_partitions
         self.vitals = self.vitals.map_partitions(
-            _impute_and_transform_partition,
-            meta=meta
+            vitalsImputeNew.fillVitals_partition,
+            self.checkingColumns,
+            meta=self.vitals._meta
         )
-        
-        # 4. Reset the index back to a standard RangeIndex
-        self.vitals = self.vitals.reset_index()
 
-        # The DaskFill method can now be simplified as the imputation is done here.
-        return self.DaskFill()
-    
-   
-    
-    def DaskFill(self):
-        # print('dask vitals columns info:')
-        # print(self.vitals)
-        print('dask vitals datatypes and info:')
-      
-        print(self.vitals.dtypes)
-        unique_stay_ids = self.vitals["stay_id"].nunique().compute()
-        print("Number of unique stay_id:", unique_stay_ids)
+        # Persist to memory, triggers computation
+        start_persist = time.time()
+        print("start persist")
+        self.vitals = self.vitals.persist()
+        print(f"Persist took {time.time() - start_persist:.2f} seconds")
 
-        # print("Number of partitions:")
-        # print(self.vitals.npartitions)
-        # print("Missing values BEFORE filling:")
-        # empties_before=self.vitals.reset_index(drop=True)[self.checkingColumns].isna().sum().compute()
-        # print(empties_before)
-        # del empties_before
-        print("Start filling:")
-
-        self.vitals = self.vitals.groupby(["stay_id"]).apply(
-            lambda df: df.ffill().bfill().interpolate(method="linear", limit_direction="both"),
-            meta=self.vitals
-        )
-        print("Finished filling, Check for duplicate columns now:")
-        
-        print(self.vitals.dtypes)
-        exit()
-        empties_after=self.vitals.loc[:, self.checkingColumns].isna().sum().compute()
-        print (empties_after)
-        # print(self.vitals.compute())
-        exit()
-        empties_after=self.vitals.loc[:, self.checkingColumns].isna().sum().compute()
-        print("Missing values AFTER filling:")
+        # Count NaNs after filling
+        empties_after = self.vitals[self.checkingColumns].isna().sum().compute()
+        print("Empties after fill:")
         print(empties_after)
-        exit()
-        print("Missing values BEFORE filling:")
-        print(self.vitals.npartitions)
-        # pandas_vitals=self.vitals.head(100)
-        print('test')
-        # print(pandas_vitals)
-        #print(self.vitals[self.checkingColumns].isna().sum().compute())
-        exit()
+
+        # Total elapsed time
+        elapsed = time.time() - start_time
+        print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
+
+        return self.vitals
         
-        # Create 15-min bins
-        df["charttime_bin"] = df["charttime"].dt.floor(f"{self.interval}min")
+        # print("sorted_groups")
+        # sorted_groups = sorted_groups.reset_index("charttime")
+        # print(sorted_groups.head(200, npartitions=1))
 
-        # Sort by patient/stay/time (important for ffill/bfill/interpolation)
-        df = df.map_partitions(lambda pdf: pdf.sort_values(["subject_id", "stay_id", "charttime"]))
+        # print('check for index in preparevitals...')
+        # print(self.vitals.dtypes)
 
-        # Fill function per partition
-        def fill_partition(pdf, columns):
-            # Apply fill per patient-stay within the partition
-            for (sub_id, stay_id), group in pdf.groupby(["subject_id", "stay_id"]):
-                idx = group.index
-                filled = (
-                    group[columns]
-                    .ffill()
-                    .bfill()
-                    .interpolate(method="linear", limit_direction="both")
-                )
-                pdf.loc[idx, columns] = filled
-            return pdf
+        # return self.find_duplicate_indices()
 
-        df = df.map_partitions(fill_partition, self.checkingColumns)
+    def find_duplicate_indices(self):
+        """
+        Find and return all duplicate index values in the Dask dataframe self.vitals
+        """
+        print("Finding duplicate index values...")
 
-        print("Missing values AFTER filling:")
-        print(df[self.checkingColumns].isna().sum().compute())
+        # Convert index to series
+        index_series = self.vitals.index.to_series()
 
-        # Optional: drop the bin column if you don't need it
-        df = df.drop(columns="charttime_bin")
+        # Mark duplicates per partition
+        duplicates_per_partition = index_series.map_partitions(
+            lambda s: s[s.duplicated()],
+            meta=index_series._meta
+        )
 
-        return df
+        # Compute the results
+        duplicated_indices = duplicates_per_partition.compute()
+
+        # Get unique duplicate values
+        unique_dupes = duplicated_indices.unique()
+        print(f"Found {len(unique_dupes)} unique duplicate index values.")
+        print("Example duplicates:", unique_dupes[:20])  # show first 20
+
+        return unique_dupes

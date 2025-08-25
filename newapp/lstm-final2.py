@@ -5,8 +5,11 @@ import glucoseImpute as gl
 import gasesImpute as ga 
 import numpy as np
 import InputData as input
+import evaluation as ev
 import dask.dataframe as dd
 from dask.distributed import Client
+import pyarrow.parquet as pa
+
 
 # Start Dask client (4 cores)
 # if __name__ == "__main__":
@@ -18,13 +21,29 @@ rows=100000
 
 df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
-
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 time_interval=15 
 # 2. Create the imputer object 
 imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 
 # 3. Prepare and impute the data
 clean_df = imputer.prepareVitals()
+
+
+# Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
+#df_filled = dd.read_csv("filled/vitals_filled-*.csv")
+df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+
+#df_filled = pa.read_table('filled/vitals_filled.parquet')
+
+# Step 3: Run evaluation
+# simulate_and_evaluate_dask_filling
+
+vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.1,n_runs=3)
+
+evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
+
+print(evaluation_results)
+
 exit()
 
 # Blood gases data

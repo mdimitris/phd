@@ -51,8 +51,8 @@ class vitalsImputeNew:
         # Fill missing values for numeric vital columns
         df[vital_cols] = (
             df[vital_cols]
-            .bfill()
             .ffill()
+            .bfill()
             .interpolate(method="linear", limit_direction="both")
         )
 
@@ -105,9 +105,9 @@ class vitalsImputeNew:
         self.vitals = self.vitals.repartition(npartitions=128)
 
         # Count NaNs before filling
-        empties_before = self.vitals[self.checkingColumns].isna().sum().compute()
-        print("Empties before fill:")
-        print(empties_before)
+        # empties_before = self.vitals[self.checkingColumns].isna().sum().compute()
+        # print("Empties before fill:")
+        # print(empties_before)
 
         # Fill missing values using map_partitions
         self.vitals = self.vitals.map_partitions(
@@ -130,7 +130,9 @@ class vitalsImputeNew:
         # Total elapsed time
         elapsed = time.time() - start_time
         print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
-        self.vitals.to_csv("filled/vitals_filled-*.csv", single_file=False, index=False)
+        #self.vitals.to_csv("filled/vitals_filled-*.csv", single_file=False, index=False)
+        self.vitals = self.vitals.reset_index()
+        self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
         return self.vitals
         
         # print("sorted_groups")

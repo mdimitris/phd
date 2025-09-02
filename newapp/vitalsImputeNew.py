@@ -42,39 +42,147 @@ class vitalsImputeNew:
         return self.checkingColumns
 
     @staticmethod
-    def fillVitals_partition(df, vital_cols):
-        # Sort charttime **within each stay_id**
+    def fillVitals_partition(df, vital_cols, edge_limit=2):
+    # Make sure charttime is datetime
+        if "stay_id" in df.index.names:
+            df = df.reset_index(level="stay_id", drop=True)
+    
+        df = df.copy()
+   
+    # Make sure charttime is datetime
+        df['charttime'] = pd.to_datetime(df['charttime'])
+
+        # Sort by stay_id and charttime
+        df = df.sort_values(['stay_id', 'charttime'])
+
+        # Group by stay_id AND existing 15-min time_bin
+        def _fill_group(g):
+            # Interpolate only interior gaps
+            g[vital_cols] = g[vital_cols].interpolate(method='linear', limit_area='inside')
+            # Optionally fill small edge gaps
+            if edge_limit is not None and edge_limit > 0:
+                g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).bfill(limit=edge_limit)
+            return g
+
+        return df.groupby(['stay_id', 'time_bin'], group_keys=False).apply(_fill_group)
+    # def fillVitals_partition(df, vital_cols):
+    #     # Sort charttime **within each stay_id**
 
     
-        df = df.groupby("stay_id", group_keys=False).apply(lambda g: g.sort_values("charttime"))
+    #     df = df.groupby("stay_id", group_keys=False).apply(lambda g: g.sort_values("charttime"))
 
-        # Fill missing values for numeric vital columns
-        df[vital_cols] = (
-            df[vital_cols]
-            .ffill()
-            .bfill()
-            .interpolate(method="linear", limit_direction="both")
-        )
+    #     # Fill missing values for numeric vital columns
+    #     df[vital_cols] = (
+    #         df[vital_cols]
+    #         .ffill()
+    #         .bfill()
+    #         .interpolate(method="linear", limit_direction="both")
+    #     )
 
-        return df
+    #     return df
+
+    # def prepareVitals(self):
+    #     start_time = time.time()
+
+    #     # Convert to datetime
+    #     self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
+
+    #     # Create 15-min bins
+    #     self.vitals["time_bin"] = self.vitals["charttime"].dt.floor("15min")
+
+    #     # Set index (not sorted to avoid expensive operation)
+    #     #self.vitals = self.vitals.set_index("charttime", sorted=False)
+
+    #     # Drop unnecessary columns
+    #     cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
+    #     self.vitals = self.vitals.drop(columns=cols_to_del, errors='ignore')
+
+    #     # Optimize datatypes
+    #     self.vitals = self.vitals.astype({
+    #         "subject_id": pd.Int32Dtype(),
+    #         "stay_id": pd.Int32Dtype(),
+    #         "gender": pd.Int8Dtype(),
+    #         "hospstay_seq": pd.Int8Dtype(),
+    #         "icustay_seq": pd.Int8Dtype(),
+    #         "hospital_expire_flag": pd.Int8Dtype(),
+    #         "label_sepsis_within_6h": pd.Int8Dtype(),
+    #         "label_sepsis_within_8h": pd.Int8Dtype(),
+    #         "label_sepsis_within_12h": pd.Int8Dtype(),
+    #         "label_sepsis_within_24h": pd.Int8Dtype(),
+    #         "sepsis_label": pd.Int8Dtype(),
+    #         "heart_rate": pd.Float32Dtype(),
+    #         "resp_rate": pd.Float32Dtype(),
+    #         "sbp": pd.Float32Dtype(),
+    #         "dbp": pd.Float32Dtype(),
+    #         "mbp": pd.Float32Dtype(),
+    #         "spo2": pd.Float32Dtype(),
+    #         "pulse_pressure": pd.Float32Dtype(),
+    #         "temperature": pd.Float32Dtype(),
+    #         "admission_age": pd.Float32Dtype(),
+    #         "los_hospital": pd.Float32Dtype(),
+    #         "los_icu": pd.Float32Dtype(),
+    #         "hours_before_sepsis": pd.Float32Dtype(),
+    #     })
+
+    #     # Repartition to a reasonable number of partitions for 4 cores
+    #     self.vitals = self.vitals.repartition(npartitions=128)
+
+    #     # Count NaNs before filling
+    #     # empties_before = self.vitals[self.checkingColumns].isna().sum().compute()
+    #     # print("Empties before fill:")
+    #     # print(empties_before)
+
+    #     self.vitals = self.vitals.shuffle("stay_id")   # or set_index("stay_id")
+
+    #     # Fill missing values using map_partitions
+    #     self.vitals = self.vitals.map_partitions(
+    #         vitalsImputeNew.fillVitals_partition,
+    #         self.checkingColumns,
+    #         meta=self.vitals._meta
+    #     )
+
+    #     # Persist to memory, triggers computation
+    #     start_persist = time.time()
+    #     print("start persist")
+    #     self.vitals = self.vitals.persist()
+    #     print(f"Persist took {time.time() - start_persist:.2f} seconds")
+
+    #     # Count NaNs after filling
+    #     empties_after = self.vitals[self.checkingColumns].isna().sum().compute()
+    #     print("Empties after fill:")
+    #     print(empties_after)
+
+    #     # Total elapsed time
+    #     elapsed = time.time() - start_time
+    #     print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
+    #     #self.vitals.to_csv("filled/vitals_filled-*.csv", single_file=False, index=False)
+    #     self.vitals = self.vitals.reset_index()
+    #     self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
+    #     return self.vitals
+        
+    #     # print("sorted_groups")
+    #     # sorted_groups = sorted_groups.reset_index("charttime")
+    #     # print(sorted_groups.head(200, npartitions=1))
+
+    #     # print('check for index in preparevitals...')
+    #     # print(self.vitals.dtypes)
+
+    #     # return self.find_duplicate_indices()
 
     def prepareVitals(self):
         start_time = time.time()
 
-        # Convert to datetime
+        # Convert charttime to datetime
         self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
 
         # Create 15-min bins
         self.vitals["time_bin"] = self.vitals["charttime"].dt.floor("15min")
 
-        # Set index (not sorted to avoid expensive operation)
-        self.vitals = self.vitals.set_index("charttime", sorted=False)
-
         # Drop unnecessary columns
         cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
         self.vitals = self.vitals.drop(columns=cols_to_del, errors='ignore')
 
-        # Optimize datatypes
+        # Optimize datatypes (same as before)
         self.vitals = self.vitals.astype({
             "subject_id": pd.Int32Dtype(),
             "stay_id": pd.Int32Dtype(),
@@ -101,48 +209,33 @@ class vitalsImputeNew:
             "hours_before_sepsis": pd.Float32Dtype(),
         })
 
-        # Repartition to a reasonable number of partitions for 4 cores
+        # Repartition by stay_id to avoid bleeding (much faster than shuffle)
+        # Each partition will contain full stay_ids
+        self.vitals = self.vitals.set_index("stay_id", sorted=False, drop=False)
+        # Optional: repartition to control partition size
         self.vitals = self.vitals.repartition(npartitions=128)
 
-        # Count NaNs before filling
-        # empties_before = self.vitals[self.checkingColumns].isna().sum().compute()
-        # print("Empties before fill:")
-        # print(empties_before)
-
-        # Fill missing values using map_partitions
+        # Fill missing values per partition
         self.vitals = self.vitals.map_partitions(
             vitalsImputeNew.fillVitals_partition,
             self.checkingColumns,
             meta=self.vitals._meta
         )
 
-        # Persist to memory, triggers computation
-        start_persist = time.time()
-        print("start persist")
+        # Persist to memory (triggers computation)
         self.vitals = self.vitals.persist()
-        print(f"Persist took {time.time() - start_persist:.2f} seconds")
 
-        # Count NaNs after filling
+        # Count NaNs after fill
         empties_after = self.vitals[self.checkingColumns].isna().sum().compute()
         print("Empties after fill:")
         print(empties_after)
 
-        # Total elapsed time
+        # Save to Parquet
+        self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
+
         elapsed = time.time() - start_time
         print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
-        #self.vitals.to_csv("filled/vitals_filled-*.csv", single_file=False, index=False)
-        self.vitals = self.vitals.reset_index()
-        self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
         return self.vitals
-        
-        # print("sorted_groups")
-        # sorted_groups = sorted_groups.reset_index("charttime")
-        # print(sorted_groups.head(200, npartitions=1))
-
-        # print('check for index in preparevitals...')
-        # print(self.vitals.dtypes)
-
-        # return self.find_duplicate_indices()
 
     def find_duplicate_indices(self):
         """

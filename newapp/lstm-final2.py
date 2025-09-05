@@ -19,9 +19,17 @@ import pyarrow.parquet as pa
 #------------24 hours-------------#
 rows=100000
 
-df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
+dtypes = {
+    "label_sepsis_within_6h": "Int8",
+    "label_sepsis_within_8h": "Int8",
+    "label_sepsis_within_12h": "Int8",
+    "label_sepsis_within_24h": "Int8",
+    "gcs_time": "object"
+}
 
-checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
+#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
+df_vitals = dd.read_csv('vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
+checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 time_interval=15 
 # 2. Create the imputer object 
 imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 

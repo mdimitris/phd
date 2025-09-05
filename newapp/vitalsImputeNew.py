@@ -182,6 +182,17 @@ class vitalsImputeNew:
         cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
         self.vitals = self.vitals.drop(columns=cols_to_del, errors='ignore')
 
+        # Define the label columns
+        label_cols = [
+            "label_sepsis_within_6h",
+            "label_sepsis_within_8h",
+            "label_sepsis_within_12h",
+            "label_sepsis_within_24h",
+        ]
+
+        # Replace NaNs with 0 in label columns
+        self.vitals[label_cols] = self.vitals[label_cols].fillna(0)
+
         # Optimize datatypes (same as before)
         self.vitals = self.vitals.astype({
             "subject_id": pd.Int32Dtype(),
@@ -209,18 +220,47 @@ class vitalsImputeNew:
             "hours_before_sepsis": pd.Float32Dtype(),
         })
 
+
+
         # Repartition by stay_id to avoid bleeding (much faster than shuffle)
         # Each partition will contain full stay_ids
         self.vitals = self.vitals.set_index("stay_id", sorted=False, drop=False)
         # Optional: repartition to control partition size
         self.vitals = self.vitals.repartition(npartitions=128)
 
-        # Fill missing values per partition
+           # Fill missing values per partition
         self.vitals = self.vitals.map_partitions(
             vitalsImputeNew.fillVitals_partition,
             self.checkingColumns,
             meta=self.vitals._meta
         )
+
+        # After imputation: replace NaNs in categorical/label columns with 0 again
+        label_cols = [
+            "label_sepsis_within_6h",
+            "label_sepsis_within_8h",
+            "label_sepsis_within_12h",
+            "label_sepsis_within_24h",
+            "sepsis_label",
+            "hospital_expire_flag",
+            "gender",
+            "hospstay_seq",
+            "icustay_seq"
+        ]
+        self.vitals[label_cols] = self.vitals[label_cols].fillna(0)
+
+        # Final cast to compact dtypes
+        self.vitals = self.vitals.astype({
+            "hospital_expire_flag": pd.Int8Dtype(),
+            "label_sepsis_within_6h": pd.Int8Dtype(),
+            "label_sepsis_within_8h": pd.Int8Dtype(),
+            "label_sepsis_within_12h": pd.Int8Dtype(),
+            "label_sepsis_within_24h": pd.Int8Dtype(),
+            "sepsis_label": pd.Int8Dtype(),
+            "gender": pd.Int8Dtype(),
+            "hospstay_seq": pd.Int8Dtype(),
+            "icustay_seq": pd.Int8Dtype(),
+        })
 
         # Persist to memory (triggers computation)
         self.vitals = self.vitals.persist()

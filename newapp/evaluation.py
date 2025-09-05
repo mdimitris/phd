@@ -59,7 +59,7 @@ class evaluation:
         results = []
 
         # Work on a small sample (so we can compute in memory)
-        df_sample =  self.data.sample(frac=0.1).compute()  # 1% sample → Pandas
+        df_sample =  self.data.sample(frac=0.5).compute()  # 1% sample → Pandas
         df_sample = df_sample.reset_index()
         print(df_sample.info())
         print(df_sample.head(200))
@@ -73,12 +73,15 @@ class evaluation:
             for _ in range(self.n_runs):
                 df_copy = df_sample.copy()
 
-                # Random mask
+                # Create a mask column
+                df_copy["mask_flag"] = False
                 mask = np.random.rand(len(df_copy)) < self.mask_rate
-                true_vals = df_copy.loc[mask, col]
-                df_copy.loc[mask, col] = np.nan
+                df_copy.loc[mask, "mask_flag"] = True
 
-                # Convert back to Dask to apply your real filler
+                true_vals = df_copy.loc[df_copy["mask_flag"], col]
+                df_copy.loc[df_copy["mask_flag"], col] = np.nan
+
+                # Convert back to Dask
                 ddf_masked = dd.from_pandas(df_copy, npartitions=4)
                 ddf_filled = ddf_masked.map_partitions(
                     vitalsImputeNew.vitalsImputeNew.fillVitals_partition,
@@ -88,23 +91,26 @@ class evaluation:
 
                 df_filled = ddf_filled.compute()
                 df_filled.dropna(subset = ['spo2', 'sbp', 'dbp','pulse_pressure','heart_rate','resp_rate','mbp','temperature'],inplace=True)
+               
 
-                # Collect imputed values
-                imputed_vals = df_filled.loc[mask, col]
+                # Collect imputed values based on mask_flag
+                imputed_vals = df_filled.loc[df_filled["mask_flag"], col]
+
+
+                # Ensure alignment (drop NAs in true_vals too)
+                true_vals = true_vals.loc[imputed_vals.index]
 
                 # Metrics
-                
-                
                 maes.append(mean_absolute_error(true_vals, imputed_vals))
                 mses.append(mean_squared_error(true_vals, imputed_vals))
                 r2s.append(r2_score(true_vals, imputed_vals))
 
-            results.append({
-                "Feature": col,
-                "MAE": np.mean(maes),
-                "MSE": np.mean(mses),
-                "RMSE": np.sqrt(np.mean(mses)),
-                "R2": np.mean(r2s),
-            })
+                results.append({
+                    "Feature": col,
+                    "MAE": np.mean(maes),
+                    "MSE": np.mean(mses),
+                    "RMSE": np.sqrt(np.mean(mses)),
+                    "R2": np.mean(r2s),
+                })
 
         return pd.DataFrame(results)

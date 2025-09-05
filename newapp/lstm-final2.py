@@ -46,7 +46,7 @@ df_filled = dd.read_parquet("filled/vitals_filled.parquet")
 # Step 3: Run evaluation
 # simulate_and_evaluate_dask_filling
 
-vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.1,n_runs=3)
+vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
 
 evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
 

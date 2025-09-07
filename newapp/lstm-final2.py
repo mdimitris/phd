@@ -28,14 +28,13 @@ dtypes = {
 }
 
 #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
-df_vitals = dd.read_csv('vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
+df_vitals = dd.read_csv('/root/scripts/vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 time_interval=15 
 # 2. Create the imputer object 
 imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 
 # 3. Prepare and impute the data
 clean_df = imputer.prepareVitals()
-
 
 # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
 #df_filled = dd.read_csv("filled/vitals_filled-*.csv")

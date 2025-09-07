@@ -55,6 +55,8 @@ class evaluation:
         Simulate missingness and evaluate your Dask fill pipeline.
         Uses vitalsImputeNew.fillVitals_partition to impute.
         """
+        
+        print("start evaluation")
 
         results = []
 
@@ -96,21 +98,34 @@ class evaluation:
                 # Collect imputed values based on mask_flag
                 imputed_vals = df_filled.loc[df_filled["mask_flag"], col]
 
-
+                print('start alignment')
                 # Ensure alignment (drop NAs in true_vals too)
                 true_vals = true_vals.loc[imputed_vals.index]
+                
+              # 1. Restrict to common index only
+                common_idx = true_vals.index.intersection(imputed_vals.index)
+
+                true_vals = true_vals.loc[common_idx]
+                imputed_vals = imputed_vals.loc[common_idx]
+
+                # 2. Drop NaNs together
+                mask = true_vals.notna() & imputed_vals.notna()
+                true_vals = true_vals[mask]
+                imputed_vals = imputed_vals[mask]
+                
+                print('calcuating maes and mses  ')
 
                 # Metrics
                 maes.append(mean_absolute_error(true_vals, imputed_vals))
                 mses.append(mean_squared_error(true_vals, imputed_vals))
                 r2s.append(r2_score(true_vals, imputed_vals))
 
-                results.append({
-                    "Feature": col,
-                    "MAE": np.mean(maes),
-                    "MSE": np.mean(mses),
-                    "RMSE": np.sqrt(np.mean(mses)),
-                    "R2": np.mean(r2s),
-                })
+            results.append({
+                "Feature": col,
+                "MAE": np.mean(maes),
+                "MSE": np.mean(mses),
+                "RMSE": np.sqrt(np.mean(mses)),
+                "R2": np.mean(r2s),
+            })
 
         return pd.DataFrame(results)

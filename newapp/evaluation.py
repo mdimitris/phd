@@ -56,12 +56,12 @@ class evaluation:
         Uses vitalsImputeNew.fillVitals_partition to impute.
         """
         
-        print("start evaluation")
+        
 
         results = []
 
         # Work on a small sample (so we can compute in memory)
-        df_sample =  self.data.sample(frac=0.5).compute()  # 1% sample → Pandas
+        df_sample =  self.data.sample(frac=0.05).compute()  # 1% sample → Pandas
         df_sample = df_sample.reset_index()
         print(df_sample.info())
         print(df_sample.head(200))
@@ -98,7 +98,6 @@ class evaluation:
                 # Collect imputed values based on mask_flag
                 imputed_vals = df_filled.loc[df_filled["mask_flag"], col]
 
-                print('start alignment')
                 # Ensure alignment (drop NAs in true_vals too)
                 true_vals = true_vals.loc[imputed_vals.index]
                 
@@ -113,13 +112,12 @@ class evaluation:
                 true_vals = true_vals[mask]
                 imputed_vals = imputed_vals[mask]
                 
-                print('calcuating maes and mses  ')
-
                 # Metrics
                 maes.append(mean_absolute_error(true_vals, imputed_vals))
                 mses.append(mean_squared_error(true_vals, imputed_vals))
                 r2s.append(r2_score(true_vals, imputed_vals))
 
+            print("start evaluation append")
             results.append({
                 "Feature": col,
                 "MAE": np.mean(maes),

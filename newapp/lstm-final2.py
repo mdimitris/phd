@@ -23,12 +23,24 @@ dtypes = {
     "label_sepsis_within_6h": "Int8",
     "label_sepsis_within_8h": "Int8",
     "label_sepsis_within_12h": "Int8",
+    "gender": "Int8",
+    "sepsis_label": "Int8",
     "label_sepsis_within_24h": "Int8",
+    "hospstay_seq" : "Int8", 
+    "hour_index_rev" : "Int8",
+    "hospital_expire_flag":"Int8",
+    "icustay_seq": "Int8",
+    "sepsis_label" : "Int8",
     "gcs_time": "object"
 }
 
+
+
+
+
 #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
-df_vitals = dd.read_csv('/root/scripts/vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
+#df_vitals = dd.read_csv('/root/scripts/vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
+df_vitals = dd.read_csv(r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 time_interval=15 
 # 2. Create the imputer object 

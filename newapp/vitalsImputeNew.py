@@ -274,10 +274,103 @@ class vitalsImputeNew:
         self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
 
         elapsed = time.time() - start_time
-        print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
+        print(f"⏱️ Total preprocessing time for interpolation: {elapsed:.2f} seconds")
 
-        
+
+        eval_df = self.xgboost_refine(frac=0.2, mask_rate=0.3, n_runs=3)
+        print(eval_df)
+
+
         return self.vitals
+    
+
+
+    def xgboost_refine(self, frac=0.2, mask_rate=0.3, n_runs=3):
+        """
+        Refine missing values with global XGBoost models after interpolation.
+        Trains once on a sample, applies to all stays, and evaluates.
+        """
+        import pandas as pd
+        import numpy as np
+        from xgboost import XGBRegressor
+        from sklearn.metrics import mean_squared_error, mean_absolute_error
+        import random
+
+        print("🔧 Starting XGBoost refinement...")
+
+        # Convert dask -> pandas sample for training
+        df_sample = self.vitals.sample(frac=frac).compute()
+        df_full = self.vitals.compute()   # careful: loads all into memory
+
+        results = []
+
+        for target in self.checkingColumns:
+            print(f"\n🚀 Training XGBoost for {target}")
+
+            # Features = all other vitals + time
+            feature_cols = [c for c in df_sample.columns if c not in ["stay_id", "charttime","icu_intime", "icu_outtime", "time_bin"]]
+            X = df_sample[feature_cols]
+            y = df_sample[target]
+
+            # Drop rows with missing target
+            mask = ~y.isna()
+            X_train, y_train = X[mask], y[mask]
+
+            if len(y_train) < 100:
+                print(f"⚠️ Skipping {target}, too few samples")
+                continue
+
+            model = XGBRegressor(
+                n_estimators=200,
+                max_depth=5,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                tree_method="hist",
+                n_jobs=-1,
+                random_state=42
+            )
+            model.fit(X_train, y_train)
+
+            # --- Evaluation with masking ---
+            scores = []
+            for run in range(n_runs):
+                df_eval = df_sample.copy()
+                known_idx = df_eval[target].dropna().index
+                masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
+                true_vals = df_eval.loc[masked_idx, target]
+                df_eval.loc[masked_idx, target] = np.nan
+
+                X_eval = df_eval[feature_cols]
+                y_pred = model.predict(X_eval.loc[masked_idx])
+                mse = mean_squared_error(true_vals, y_pred)
+                mae = mean_absolute_error(true_vals, y_pred)
+                scores.append((mse, mae))
+
+            mse_mean = np.mean([s[0] for s in scores])
+            mae_mean = np.mean([s[1] for s in scores])
+            results.append({"target": target, "MSE": mse_mean, "MAE": mae_mean})
+            print(f"✅ {target}: MSE={mse_mean:.4f}, MAE={mae_mean:.4f}")
+
+            # --- Apply model to fill NaNs in full dataset ---
+            missing_mask = df_full[target].isna()
+            if missing_mask.any():
+                X_missing = df_full.loc[missing_mask, feature_cols]
+                df_full.loc[missing_mask, target] = model.predict(X_missing)
+
+        # Save back into parquet
+        out_path = "imputed_xgb/vitals_hybrid.parquet"
+        os.makedirs("imputed_xgb", exist_ok=True)
+        df_full.to_parquet(out_path, index=False)
+        print(f"\n💾 Hybrid-imputed dataset saved to {out_path}")
+
+        # Return metrics
+        eval_df = pd.DataFrame(results)
+        print("\n📊 Hybrid XGBoost Evaluation:")
+        print(eval_df)
+        return eval_df
+    
+
 
     def find_duplicate_indices(self):
         """

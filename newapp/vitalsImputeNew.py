@@ -275,6 +275,8 @@ class vitalsImputeNew:
 
         elapsed = time.time() - start_time
         print(f"⏱️ Total preprocessing time: {elapsed:.2f} seconds")
+
+        
         return self.vitals
 
     def find_duplicate_indices(self):

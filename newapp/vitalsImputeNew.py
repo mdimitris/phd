@@ -294,7 +294,7 @@ class vitalsImputeNew:
         import numpy as np
         from xgboost import XGBRegressor
         from sklearn.metrics import mean_squared_error, mean_absolute_error
-        import random
+        import random, os
 
         print("🔧 Starting XGBoost refinement...")
 
@@ -307,8 +307,10 @@ class vitalsImputeNew:
         for target in self.checkingColumns:
             print(f"\n🚀 Training XGBoost for {target}")
 
-            # Features = all other vitals + time
-            feature_cols = [c for c in df_sample.columns if c not in ["stay_id", "charttime","icu_intime", "icu_outtime", "time_bin"]]
+            # Features = all other vitals (exclude id/time cols)
+            feature_cols = [c for c in df_sample.columns 
+                            if c not in ["stay_id", "charttime", "icu_intime", "icu_outtime", "time_bin"]]
+
             X = df_sample[feature_cols]
             y = df_sample[target]
 
@@ -316,8 +318,12 @@ class vitalsImputeNew:
             mask = ~y.isna()
             X_train, y_train = X[mask], y[mask]
 
+            # Drop rows where features still NaN
+            valid_mask = ~X_train.isna().any(axis=1)
+            X_train, y_train = X_train[valid_mask], y_train[valid_mask]
+
             if len(y_train) < 100:
-                print(f"⚠️ Skipping {target}, too few samples")
+                print(f"⚠️ Skipping {target}, too few samples after cleaning")
                 continue
 
             model = XGBRegressor(
@@ -337,26 +343,43 @@ class vitalsImputeNew:
             for run in range(n_runs):
                 df_eval = df_sample.copy()
                 known_idx = df_eval[target].dropna().index
+                if len(known_idx) < 10:
+                    continue
+
                 masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
                 true_vals = df_eval.loc[masked_idx, target]
                 df_eval.loc[masked_idx, target] = np.nan
 
-                X_eval = df_eval[feature_cols]
-                y_pred = model.predict(X_eval.loc[masked_idx])
+                X_eval = df_eval[feature_cols].loc[masked_idx]
+
+                # Drop rows with NaNs in features or target
+                eval_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
+                X_eval, true_vals = X_eval[eval_mask], true_vals[eval_mask]
+
+                if len(true_vals) == 0:
+                    continue
+
+                y_pred = model.predict(X_eval)
                 mse = mean_squared_error(true_vals, y_pred)
                 mae = mean_absolute_error(true_vals, y_pred)
                 scores.append((mse, mae))
 
-            mse_mean = np.mean([s[0] for s in scores])
-            mae_mean = np.mean([s[1] for s in scores])
-            results.append({"target": target, "MSE": mse_mean, "MAE": mae_mean})
-            print(f"✅ {target}: MSE={mse_mean:.4f}, MAE={mae_mean:.4f}")
+            if scores:
+                mse_mean = np.mean([s[0] for s in scores])
+                mae_mean = np.mean([s[1] for s in scores])
+                results.append({"target": target, "MSE": mse_mean, "MAE": mae_mean})
+                print(f"✅ {target}: MSE={mse_mean:.4f}, MAE={mae_mean:.4f}")
+            else:
+                print(f"⚠️ No valid evaluation scores for {target}")
 
             # --- Apply model to fill NaNs in full dataset ---
             missing_mask = df_full[target].isna()
             if missing_mask.any():
                 X_missing = df_full.loc[missing_mask, feature_cols]
-                df_full.loc[missing_mask, target] = model.predict(X_missing)
+                valid_missing = ~X_missing.isna().any(axis=1)
+                if valid_missing.sum() > 0:
+                    df_full.loc[missing_mask & valid_missing, target] = \
+                        model.predict(X_missing[valid_missing])
 
         # Save back into parquet
         out_path = "imputed_xgb/vitals_hybrid.parquet"
@@ -369,7 +392,7 @@ class vitalsImputeNew:
         print("\n📊 Hybrid XGBoost Evaluation:")
         print(eval_df)
         return eval_df
-    
+        
 
 
     def find_duplicate_indices(self):

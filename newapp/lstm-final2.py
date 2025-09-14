@@ -41,10 +41,10 @@ dtypes = {
 #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
 df_sample = pd.read_csv(
-    '/root/scripts/vitals_24_hours_final.csv',
+    '/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
     sep='|',
     dtype=dtypes,
-    nrows=35000
+    nrows=70000
 )
 df_vitals = dd.from_pandas(df_sample, npartitions=1)
 #df_vitals = dd.read_csv('/root/scripts/vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)

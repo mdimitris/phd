@@ -148,11 +148,15 @@ class vitalsImputeNew:
 
         return df.groupby(['stay_id', 'time_bin'], group_keys=False).apply(_fill_group)
     
-    def prepareVitals(self, run_xgb=True):
+
+    def prepareVitals(self, run_xgb=True, train_frac=1.0):
         """
         Full pipeline: clean → interpolate → (optional) refine with XGBoost.
+        Does NOT run evaluation.
         """
         import time
+        import dask.dataframe as dd
+
         start_time = time.time()
 
         # 1. Basic cleaning
@@ -161,15 +165,40 @@ class vitalsImputeNew:
         # 2. Interpolation + edge filling (per stay_id + time_bin)
         self.interpolate_and_fill()
 
-        # 3. XGBoost refinement (optional)
-        eval_df = None
-        if run_xgb:
-            eval_df = self.xgboost_refine()
+        # Reload filled dataset (as Dask for consistency)
+        df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+
+        # # 3. XGBoost refinement (optional)
+        # if run_xgb:
+        #     self.xgboost_refine(frac=train_frac)
 
         elapsed = time.time() - start_time
         print(f"⏱️ Pipeline finished in {elapsed:.1f} seconds")
 
-        return eval_df if run_xgb else self.vitals
+        return df_filled
+    
+    # def prepareVitals(self, run_xgb=True):
+    #     """
+    #     Full pipeline: clean → interpolate → (optional) refine with XGBoost.
+    #     """
+    #     import time
+    #     start_time = time.time()
+
+    #     # 1. Basic cleaning
+    #     self.cleanVitals()
+
+    #     # 2. Interpolation + edge filling (per stay_id + time_bin)
+    #     self.interpolate_and_fill()
+
+    #     # 3. XGBoost refinement (optional)
+    #     eval_df = None
+    #     if run_xgb:
+    #         eval_df = self.xgboost_refine()
+
+    #     elapsed = time.time() - start_time
+    #     print(f"⏱️ Pipeline finished in {elapsed:.1f} seconds")
+
+    #     return eval_df if run_xgb else self.vitals
     
 
     # def prepareVitals(self):
@@ -287,32 +316,33 @@ class vitalsImputeNew:
     #     return self.vitals
     
 
-    def xgboost_refine(self, frac=0.2, mask_rate=0.3, n_runs=3):
-        import pandas as pd, numpy as np, random, os
+    def xgboost_refine(self, frac=0.2):
+        """
+        Train global XGBoost models for each vital sign 
+        and impute missing values in the full dataset.
+        """
+        import pandas as pd, numpy as np, os
         from xgboost import XGBRegressor
-        from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-        print("🔧 Starting XGBoost refinement...")
+        print("🔧 Training XGBoost models...")
 
-        # Load parquet as pandas
+        # Load filled dataset (after interpolation)
         df_full = pd.read_parquet("filled/vitals_filled.parquet")
-
-        # Sample for training/eval
         df_sample = df_full.sample(frac=frac, random_state=42)
 
-        results = []
+        self.models = {}   # store trained models
+
         for target in self.checkingColumns:
             print(f"\n🚀 Training XGBoost for {target}")
 
             feature_cols = [c for c in df_sample.columns 
-                            if c not in ["stay_id", "charttime", "icu_intime", "icu_outtime", "time_bin"]]
+                            if c not in ["stay_id", "charttime","icu_intime","icu_outtime","time_bin"]]
 
-            # Train only on rows where target is observed
             X = df_sample[feature_cols]
             y = df_sample[target]
+
             mask = ~y.isna()
             X_train, y_train = X[mask], y[mask]
-
             valid_mask = ~X_train.isna().any(axis=1)
             X_train, y_train = X_train[valid_mask], y_train[valid_mask]
 
@@ -332,35 +362,10 @@ class vitalsImputeNew:
             )
             model.fit(X_train, y_train)
 
-            # --- Evaluation with masking ---
-            scores = []
-            for _ in range(n_runs):
-                df_eval = df_sample.copy()
-                known_idx = df_eval[target].dropna().index
-                masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
-                true_vals = df_eval.loc[masked_idx, target]
-                df_eval.loc[masked_idx, target] = np.nan
+            # Save trained model
+            self.models[target] = (model, feature_cols)
 
-                X_eval = df_eval.loc[masked_idx, feature_cols]
-                eval_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
-                X_eval, true_vals = X_eval[eval_mask], true_vals[eval_mask]
-
-                if len(true_vals) == 0:
-                    continue
-
-                y_pred = model.predict(X_eval)
-                scores.append((
-                    mean_squared_error(true_vals, y_pred),
-                    mean_absolute_error(true_vals, y_pred)
-                ))
-
-            if scores:
-                mse_mean = np.mean([s[0] for s in scores])
-                mae_mean = np.mean([s[1] for s in scores])
-                results.append({"target": target, "MSE": mse_mean, "MAE": mae_mean})
-                print(f"✅ {target}: MSE={mse_mean:.4f}, MAE={mae_mean:.4f}")
-
-            # --- Apply to missing values in full dataset ---
+            # Fill missing values in full dataset
             missing_mask = df_full[target].isna()
             if missing_mask.any():
                 X_missing = df_full.loc[missing_mask, feature_cols]
@@ -373,5 +378,3 @@ class vitalsImputeNew:
         out_path = "imputed_xgb/vitals_hybrid.parquet"
         df_full.to_parquet(out_path, index=False)
         print(f"\n💾 Hybrid-imputed dataset saved to {out_path}")
-
-        return pd.DataFrame(results)

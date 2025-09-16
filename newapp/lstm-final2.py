@@ -41,10 +41,11 @@ dtypes = {
 #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
 df_sample = pd.read_csv(
-    '/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
+    r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
+    #'/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
     sep='|',
     dtype=dtypes,
-    nrows=70000
+    nrows=270000
 )
 df_vitals = dd.from_pandas(df_sample, npartitions=1)
 #df_vitals = dd.read_csv('/root/scripts/vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
@@ -70,6 +71,16 @@ vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_r
 evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
 
 print(evaluation_results)
+
+
+# 2. Run XGBoost refinement
+imputer.xgboost_refine(frac=0.8)
+
+# 3. Evaluate XGBoost
+xgb_evaluator = ev.evaluation(None, imputer.get_checkingColumns(), mask_rate=0.5, n_runs=3)
+xgb_evaluator.models = imputer.models  # reuse trained models
+xgb_results = xgb_evaluator.evaluate_xgboost_filling(frac=0.2, mask_rate=0.3, n_runs=3)
+print("XGBoost results:\n", xgb_results)
 
 exit()
 

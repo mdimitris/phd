@@ -130,114 +130,49 @@ class evaluation:
     
 
 
-    def evaluate_xgboost_filling(
-        self, 
-        frac: float = 0.05, 
-        mask_rate: float = 0.3, 
-        n_runs: int = 3
-    ):
+    def evaluate_xgboost_filling(self, frac=0.2, mask_rate=0.3, n_runs=3):
         """
-        Evaluate XGBoost-based imputation with simulated missingness.
-
-        Parameters
-        ----------
-        frac : float
-            Fraction of the dataset to sample for evaluation (keeps memory small).
-        mask_rate : float
-            Fraction of known values to mask per run.
-        n_runs : int
-            Number of masking/evaluation runs per feature.
-
-        Returns
-        -------
-        pd.DataFrame
-            Evaluation results with MAE, MSE, RMSE, and R2 per vital column.
+        Evaluate XGBoost imputation by masking known values and checking accuracy.
+        Requires self.models trained with xgboost_refine().
         """
-        import pandas as pd
-        import numpy as np
-        import random
-        from xgboost import XGBRegressor
-        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        import pandas as pd, numpy as np, random
+        from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+        df_full = pd.read_parquet("filled/vitals_filled.parquet")
+        df_sample = df_full.sample(frac=frac, random_state=42)
 
         results = []
+        for target, (model, feature_cols) in self.models.items():
+            print(f"\n📊 Evaluating {target}...")
 
-        # Take a small sample for speed (convert to pandas once)
-        df_sample = self.data.sample(frac=frac).compute().reset_index(drop=True)
-        df_sample["charttime"] = pd.to_datetime(df_sample["charttime"], errors="coerce")
-        df_sample = df_sample.dropna(subset=["stay_id", "charttime"])
-        df_sample = df_sample.sort_values(["stay_id", "charttime"])
-
-        for col in self.columns_to_fill:
             maes, mses, rmses, r2s = [], [], [], []
-
-            # Exclude target + metadata columns from features
-            feature_cols = [
-                c for c in df_sample.columns 
-                if c not in ["stay_id", "charttime", "icu_intime", "icu_outtime", "time_bin", col]
-            ]
-
-            if col not in df_sample.columns:
-                print(f"⚠️ Skipping {col}, column not in sample")
-                continue
-
-            for run in range(n_runs):
-                df_copy = df_sample.copy()
-
-                # Find indices with real (non-missing) values
-                known_idx = df_copy[col].dropna().index
-                if len(known_idx) < 50:
-                    print(f"⚠️ Skipping {col}, too few known values")
+            for _ in range(n_runs):
+                df_eval = df_sample.copy()
+                known_idx = df_eval[target].dropna().index
+                if len(known_idx) < 10:
                     continue
 
-                # Mask a subset of observed values
                 masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
-                true_vals = df_copy.loc[masked_idx, col]
-                df_copy.loc[masked_idx, col] = np.nan
+                true_vals = df_eval.loc[masked_idx, target]
+                df_eval.loc[masked_idx, target] = np.nan
 
-                # Training data = all rows where target is still observed
-                X_train = df_copy.loc[~df_copy[col].isna(), feature_cols]
-                y_train = df_copy.loc[~df_copy[col].isna(), col]
-
-                # Drop rows with NaNs in features
-                valid_mask = ~X_train.isna().any(axis=1)
-                X_train, y_train = X_train[valid_mask], y_train[valid_mask]
-
-                if len(y_train) < 50:
-                    continue
-
-                # Train model
-                model = XGBRegressor(
-                    n_estimators=200,
-                    max_depth=5,
-                    learning_rate=0.05,
-                    subsample=0.8,
-                    colsample_bytree=0.8,
-                    tree_method="hist",
-                    n_jobs=-1,
-                    random_state=42
-                )
-                model.fit(X_train, y_train)
-
-                # Predict masked values
-                X_eval = df_copy.loc[masked_idx, feature_cols]
-                eval_mask = ~X_eval.isna().any(axis=1)
-                X_eval, true_vals = X_eval[eval_mask], true_vals.loc[eval_mask]
+                X_eval = df_eval.loc[masked_idx, feature_cols]
+                eval_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
+                X_eval, true_vals = X_eval[eval_mask], true_vals[eval_mask]
 
                 if len(true_vals) == 0:
                     continue
 
                 y_pred = model.predict(X_eval)
 
-                # Metrics
                 maes.append(mean_absolute_error(true_vals, y_pred))
                 mses.append(mean_squared_error(true_vals, y_pred))
                 rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
                 r2s.append(r2_score(true_vals, y_pred))
 
-            # Aggregate results for this column
             if maes:
                 results.append({
-                    "Feature": col,
+                    "Feature": target,
                     "MAE": np.mean(maes),
                     "MSE": np.mean(mses),
                     "RMSE": np.mean(rmses),
@@ -246,6 +181,6 @@ class evaluation:
                 })
 
         eval_df = pd.DataFrame(results)
-        print("\n📊 XGBoost Filling Evaluation:")
+        print("\n📊 XGBoost Evaluation Results:")
         print(eval_df)
         return eval_df

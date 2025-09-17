@@ -14,7 +14,7 @@ import tracemalloc
 import gc
 import dask.dataframe as dd
 import shutil
-
+import xgboost as xgb
 
 class vitalsImputeNew:
 
@@ -315,66 +315,63 @@ class vitalsImputeNew:
 
     #     return self.vitals
     
-
-    def xgboost_refine(self, frac=0.2):
-        """
-        Train global XGBoost models for each vital sign 
-        and impute missing values in the full dataset.
-        """
-        import pandas as pd, numpy as np, os
-        from xgboost import XGBRegressor
-
+    def xgboost_new (self,frac=0.2):
+        
         print("🔧 Training XGBoost models...")
 
         # Load filled dataset (after interpolation)
-        df_full = pd.read_parquet("filled/vitals_filled.parquet")
-        df_sample = df_full.sample(frac=frac, random_state=42)
+        df_full = dd.read_parquet("filled/vitals_filled.parquet")
+        
+        label = pd.DataFrame(np.random.randint(2, size=4))
+        dtrain = xgb.DMatrix(df_full, label=label)
+        
+        # df_sample = df_full.sample(frac=frac, random_state=42)
+        
+        # # Create regression matrices
+        # dtrain_reg = xgb.DMatrix(X_train, y_train, enable_categorical=True)
+        # dtest_reg = xgb.DMatrix(X_test, y_test, enable_categorical=True)
+        
 
-        self.models = {}   # store trained models
+    def xgboost_refine(self, frac=0.2):
+        # Start a Dask cluster
+        client = Client(LocalCluster())
 
-        for target in self.checkingColumns:
-            print(f"\n🚀 Training XGBoost for {target}")
+        # List of columns to impute
+        cols_to_impute = ['heart_rate', 'sbp', 'dbp', 'mbp', 'resp_rate']
+        feature_cols = [col for col in ddf.columns if col not in cols_to_impute]
 
-            feature_cols = [c for c in df_sample.columns 
-                            if c not in ["stay_id", "charttime","icu_intime","icu_outtime","time_bin"]]
+        # Make a copy to hold the imputed values
+        ddf_imputed = ddf.copy()
 
-            X = df_sample[feature_cols]
-            y = df_sample[target]
+        for col_to_impute in cols_to_impute:
+            print(f"Imputing {col_to_impute}...")
 
-            mask = ~y.isna()
-            X_train, y_train = X[mask], y[mask]
-            valid_mask = ~X_train.isna().any(axis=1)
-            X_train, y_train = X_train[valid_mask], y_train[valid_mask]
+            # Create masks for the training and prediction sets
+            has_value_mask = ddf_imputed[col_to_impute].notna()
+            needs_impute_mask = ddf_imputed[col_to_impute].isna()
 
-            if len(y_train) < 100:
-                print(f"⚠️ Skipping {target}, too few samples")
-                continue
+            # Define training and prediction features and targets
+            X_train = ddf_imputed[feature_cols][has_value_mask]
+            y_train = ddf_imputed[col_to_impute][has_value_mask]
+            X_predict = ddf_imputed[feature_cols][needs_impute_mask]
 
-            model = XGBRegressor(
-                n_estimators=200,
-                max_depth=5,
-                learning_rate=0.05,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                tree_method="hist",
-                n_jobs=-1,
-                random_state=42
-            )
+            # Initialize and train the XGBoost model
+            model = XGBRegressor(n_estimators=100, objective='reg:squarederror')
             model.fit(X_train, y_train)
 
-            # Save trained model
-            self.models[target] = (model, feature_cols)
+            # Predict the missing values
+            predicted_values = model.predict(X_predict)
 
-            # Fill missing values in full dataset
-            missing_mask = df_full[target].isna()
-            if missing_mask.any():
-                X_missing = df_full.loc[missing_mask, feature_cols]
-                valid_missing = ~X_missing.isna().any(axis=1)
-                df_full.loc[missing_mask & valid_missing, target] = \
-                    model.predict(X_missing[valid_missing])
+            # Align the predictions with the original DataFrame
+            imputed_series = dd.from_dask_array(predicted_values, meta=(col_to_impute, 'f4'))
+            imputed_series.index = X_predict.index
 
-        # Save refined dataset
-        os.makedirs("imputed_xgb", exist_ok=True)
-        out_path = "imputed_xgb/vitals_hybrid.parquet"
-        df_full.to_parquet(out_path, index=False)
-        print(f"\n💾 Hybrid-imputed dataset saved to {out_path}")
+            # Fill the missing cells with the predicted values
+            ddf_imputed[col_to_impute] = ddf_imputed[col_to_impute].fillna(imputed_series)
+            
+        # Clean up the Dask client
+        client.close()
+
+        # The final result is a Dask DataFrame with imputed values.
+        # You can save it back to Parquet or use it for further analysis.
+        ddf_imputed.to_parquet('filled/vitals_imputed_xgb.parquet')

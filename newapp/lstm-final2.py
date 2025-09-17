@@ -40,16 +40,17 @@ dtypes = {
 
 #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
-df_sample = pd.read_csv(
-    r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
-    #'/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
-    sep='|',
-    dtype=dtypes,
-    nrows=270000
-)
-df_vitals = dd.from_pandas(df_sample, npartitions=1)
-#df_vitals = dd.read_csv('/root/scripts/vitals_24_hours_final_demo.csv', sep='|', dtype=dtypes)
-#df_vitals = dd.read_csv(r"C:\phd-final\phd\newapp\vitals_24_hours_final_demo.csv", sep='|', dtype=dtypes)
+# df_sample = pd.read_csv(
+#     #r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
+#     '/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
+#     sep='|',
+#     dtype=dtypes,
+#     nrows=80000
+# )
+#df_vitals = dd.from_pandas(df_sample, npartitions=1)
+df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
+
+#df_vitals = dd.read_csv(r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 time_interval=15 
 # 2. Create the imputer object 
@@ -71,6 +72,7 @@ vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_r
 evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
 
 print(evaluation_results)
+exit()
 
 
 # 2. Run XGBoost refinement

@@ -18,7 +18,7 @@ def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     ddf[time_field] = dd.to_datetime(ddf[time_field], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
     
     # Sort within partitions (cheaper than full sort)
-    ddf = ddf.map_partitions(lambda df: df.sort_values(by=["stay_id", time_field]))
+    #ddf = ddf.map_partitions(lambda df: df.sort_values(by=["stay_id", time_field]))
     
     # Optional: repartition if you plan global operations
     # ddf = ddf.repartition(npartitions=10)
@@ -37,6 +37,7 @@ def clearEmpties(df, columns, time_field, thresh_num):
         )
         df.sort_values(by=["stay_id", time_field], inplace=True)
         return df
+
 
 def transFloat32 (df, columns):
 

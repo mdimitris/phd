@@ -1,4 +1,3 @@
-import InputData
 import pandas as pd
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer
@@ -15,6 +14,7 @@ import gc
 import dask.dataframe as dd
 import shutil
 import xgboost as xgb
+from InputData import *
 
 class vitalsImputeNew:
 
@@ -46,10 +46,8 @@ class vitalsImputeNew:
         Basic cleaning: time handling, dropping unused cols,
         label fixing, and dtype optimization.
         """
-        import pandas as pd
 
-        # Convert charttime
-        self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
+        self.vitals = clearEmpties_ddf (self.vitals, self.checkingColumns, "charttime", 4)
 
         # Create 15-min bins
         self.vitals["time_bin"] = self.vitals["charttime"].dt.floor("15min")
@@ -57,6 +55,10 @@ class vitalsImputeNew:
         # Drop unnecessary columns
         cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
         self.vitals = self.vitals.drop(columns=cols_to_del, errors="ignore")
+
+        #make floats have two decimals only
+        decimal_cols = ['temperature','admission_age','los_hospital','los_icu','hours_before_sepsis']
+        self.vitals[decimal_cols] = transFloat32 (self.vitals, decimal_cols)
 
         # Define label columns
         label_cols = [
@@ -315,63 +317,3 @@ class vitalsImputeNew:
 
     #     return self.vitals
     
-    def xgboost_new (self,frac=0.2):
-        
-        print("🔧 Training XGBoost models...")
-
-        # Load filled dataset (after interpolation)
-        df_full = dd.read_parquet("filled/vitals_filled.parquet")
-        
-        label = pd.DataFrame(np.random.randint(2, size=4))
-        dtrain = xgb.DMatrix(df_full, label=label)
-        
-        # df_sample = df_full.sample(frac=frac, random_state=42)
-        
-        # # Create regression matrices
-        # dtrain_reg = xgb.DMatrix(X_train, y_train, enable_categorical=True)
-        # dtest_reg = xgb.DMatrix(X_test, y_test, enable_categorical=True)
-        
-
-    def xgboost_refine(self, frac=0.2):
-        # Start a Dask cluster
-        client = Client(LocalCluster())
-
-        # List of columns to impute
-        cols_to_impute = ['heart_rate', 'sbp', 'dbp', 'mbp', 'resp_rate']
-        feature_cols = [col for col in ddf.columns if col not in cols_to_impute]
-
-        # Make a copy to hold the imputed values
-        ddf_imputed = ddf.copy()
-
-        for col_to_impute in cols_to_impute:
-            print(f"Imputing {col_to_impute}...")
-
-            # Create masks for the training and prediction sets
-            has_value_mask = ddf_imputed[col_to_impute].notna()
-            needs_impute_mask = ddf_imputed[col_to_impute].isna()
-
-            # Define training and prediction features and targets
-            X_train = ddf_imputed[feature_cols][has_value_mask]
-            y_train = ddf_imputed[col_to_impute][has_value_mask]
-            X_predict = ddf_imputed[feature_cols][needs_impute_mask]
-
-            # Initialize and train the XGBoost model
-            model = XGBRegressor(n_estimators=100, objective='reg:squarederror')
-            model.fit(X_train, y_train)
-
-            # Predict the missing values
-            predicted_values = model.predict(X_predict)
-
-            # Align the predictions with the original DataFrame
-            imputed_series = dd.from_dask_array(predicted_values, meta=(col_to_impute, 'f4'))
-            imputed_series.index = X_predict.index
-
-            # Fill the missing cells with the predicted values
-            ddf_imputed[col_to_impute] = ddf_imputed[col_to_impute].fillna(imputed_series)
-            
-        # Clean up the Dask client
-        client.close()
-
-        # The final result is a Dask DataFrame with imputed values.
-        # You can save it back to Parquet or use it for further analysis.
-        ddf_imputed.to_parquet('filled/vitals_imputed_xgb.parquet')

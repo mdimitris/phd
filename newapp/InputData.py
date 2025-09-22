@@ -8,9 +8,6 @@ def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Replace "NULL" with NaN
     ddf = ddf.replace("NULL", None)  # Dask supports None as missing
     
-    # Drop rows where all specified columns are empty
-    ddf = ddf.dropna(subset=columns, how="all")
-    
     # Drop rows that have fewer than thresh_num non-NA values in specified columns
     ddf = ddf.dropna(subset=columns, thresh=thresh_num)
     

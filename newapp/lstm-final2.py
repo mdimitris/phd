@@ -45,12 +45,12 @@ dtypes = {
 #     '/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
 #     sep='|',
 #     dtype=dtypes,
-#     nrows=80000
+#     nrows=100000
 # )
 #df_vitals = dd.from_pandas(df_sample, npartitions=1)
-df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
+#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
 
-#df_vitals = dd.read_csv(r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 time_interval=15 
 # 2. Create the imputer object 

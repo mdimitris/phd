@@ -50,7 +50,8 @@ class vitalsImputeNew:
         self.vitals = clearEmpties_ddf (self.vitals, self.checkingColumns, "charttime", 4)
 
         # Create 15-min bins
-        self.vitals["time_bin"] = self.vitals["charttime"].dt.floor("15min")
+        self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
+        self.vitals["time_bin"] =self.vitals["charttime"].dt.floor("15min")
 
         # Drop unnecessary columns
         cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
@@ -58,7 +59,7 @@ class vitalsImputeNew:
 
         #make floats have two decimals only
         decimal_cols = ['temperature','admission_age','los_hospital','los_icu','hours_before_sepsis']
-        self.vitals[decimal_cols] = transFloat32 (self.vitals, decimal_cols)
+        #self.vitals[decimal_cols] = transFloat32 (self.vitals, decimal_cols)
 
         # Define label columns
         label_cols = [

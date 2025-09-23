@@ -8,10 +8,14 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Replace "NULL" with NaN
     ddf = ddf.replace("NULL", None)  # Dask supports None as missing
-    
+    print("Unique patients before cleaning the dask dataframe:", ddf['subject_id'].nunique().compute())
+    print('Rows before droping empties or missing data rows',ddf.shape[0].compute())
+
     # Drop rows that have fewer than thresh_num non-NA values in specified columns
     ddf = ddf.dropna(subset=columns, thresh=thresh_num)
-    
+    print("Unique patients after cleaning the dask dataframe:",  ddf['subject_id'].nunique().compute())
+    print('Rows after droping empties or missing data rows',ddf.shape[0].compute())
+     
     # Convert time field to datetime
     ddf[time_field] = dd.to_datetime(ddf[time_field], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
     

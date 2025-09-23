@@ -47,7 +47,7 @@ class vitalsImputeNew:
         label fixing, and dtype optimization.
         """
 
-        self.vitals = clearEmpties_ddf (self.vitals, self.checkingColumns, "charttime", 4)
+        self.vitals = clearEmpties_ddf (self.vitals, self.checkingColumns, "charttime", 3)
 
         # Create 15-min bins
         self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
@@ -111,6 +111,7 @@ class vitalsImputeNew:
         # Repartition so all rows of a stay are together
         self.vitals = self.vitals.set_index("stay_id", sorted=False, drop=False)
         self.vitals = self.vitals.repartition(npartitions=128)
+        
 
         # Apply imputation respecting stay_id + time_bin
         self.vitals = self.vitals.map_partitions(
@@ -149,7 +150,7 @@ class vitalsImputeNew:
                 g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).bfill(limit=edge_limit)
             return g
 
-        return df.groupby(['stay_id', 'time_bin'], group_keys=False).apply(_fill_group)
+        return df.groupby(['stay_id', 'time_bin'], group_keys=False,include_groups=False).apply(_fill_group)
     
 
     def prepareVitals(self, run_xgb=True, train_frac=1.0):
@@ -166,6 +167,7 @@ class vitalsImputeNew:
         self.cleanVitals()
 
         # 2. Interpolation + edge filling (per stay_id + time_bin)
+        self.checkingColumns = self.checkingColumns.append('temperature')
         self.interpolate_and_fill()
 
         # Reload filled dataset (as Dask for consistency)

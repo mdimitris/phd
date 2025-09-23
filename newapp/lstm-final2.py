@@ -52,10 +52,10 @@ dtypes = {
 # bad_locs = bad_mask.any(axis=1)
 # print(df_sample.loc[bad_locs].head(5))
 # df_vitals = dd.from_pandas(df_sample, npartitions=1)
-df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
+# df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
 
 df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
+checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 time_interval=15 
 # 2. Create the imputer object 
 imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 

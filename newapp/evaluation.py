@@ -55,16 +55,14 @@ class evaluation:
         Simulate missingness and evaluate your Dask fill pipeline.
         Uses vitalsImputeNew.fillVitals_partition to impute.
         """
-        
-        
-
+    
         results = []
 
         # Work on a small sample (so we can compute in memory)
-        df_sample =  self.data.sample(frac=0.05).compute()  # 1% sample → Pandas
+        df_sample =  self.data.sample(frac=0.25).compute()  # 1% sample → Pandas
         df_sample = df_sample.reset_index()
+        print('Evaluation Sample dataframe for vitals:')
         print(df_sample.info())
-        print(df_sample.head(200))
  
         df_sample["charttime"] = pd.to_datetime(df_sample["charttime"], errors="coerce")
         df_sample = df_sample.dropna(subset=["stay_id", "charttime"])

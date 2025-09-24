@@ -41,18 +41,18 @@ dtypes = {
 #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
 # df_sample = pd.read_csv(
-#     #r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
-#     '/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
+#     r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
+#     #'/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
 #     sep='|',
 #     dtype=dtypes,
-#     nrows=80000)
+#     nrows=8000)
 # print(df_sample.dtypes)
 # df_sample.to_csv("df_sample.csv", sep="|", index=False)
 # bad_mask = df_sample.apply(lambda col: col.astype(str).str.contains("2145-08-06", na=False))
 # bad_locs = bad_mask.any(axis=1)
 # print(df_sample.loc[bad_locs].head(5))
 # df_vitals = dd.from_pandas(df_sample, npartitions=1)
-# df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
+#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
 
 df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]

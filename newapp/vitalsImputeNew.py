@@ -111,8 +111,9 @@ class vitalsImputeNew:
         # Repartition so all rows of a stay are together
         self.vitals = self.vitals.set_index("stay_id", sorted=False, drop=False)
         self.vitals = self.vitals.repartition(npartitions=128)
-        
-
+        #add temperature in columns for interpolation
+        print('add temperature in checking columns and start partition filling')
+        self.checkingColumns.append("temperature")
         # Apply imputation respecting stay_id + time_bin
         self.vitals = self.vitals.map_partitions(
             vitalsImputeNew.fillVitals_partition,
@@ -121,10 +122,14 @@ class vitalsImputeNew:
         ).persist()
 
         # Save after interpolation
+        print('Start saving filled data to parquets')
         self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
         print("💾 Saved interpolated vitals → filled/vitals_filled.parquet")
-    
-    
+        # Check missing values only in checkingColumns
+        missing_summary = self.vitals[self.checkingColumns].isna().sum().compute()
+        print("🧐 Missing values per vital column after interpolation:")
+        print(missing_summary[missing_summary > 0])
+        
     
 
     @staticmethod
@@ -149,8 +154,9 @@ class vitalsImputeNew:
             if edge_limit is not None and edge_limit > 0:
                 g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).bfill(limit=edge_limit)
             return g
+        
 
-        return df.groupby(['stay_id', 'time_bin'], group_keys=False,include_groups=False).apply(_fill_group)
+        return df.groupby(['stay_id', 'time_bin'], group_keys=False).apply(_fill_group)
     
 
     def prepareVitals(self, run_xgb=True, train_frac=1.0):
@@ -167,7 +173,6 @@ class vitalsImputeNew:
         self.cleanVitals()
 
         # 2. Interpolation + edge filling (per stay_id + time_bin)
-        self.checkingColumns = self.checkingColumns.append('temperature')
         self.interpolate_and_fill()
 
         # Reload filled dataset (as Dask for consistency)

@@ -59,7 +59,7 @@ class evaluation:
         results = []
 
         # Work on a small sample (so we can compute in memory)
-        df_sample =  self.data.sample(frac=0.25).compute()  # 1% sample → Pandas
+        df_sample =  self.data.sample(frac=0.15).compute()  # 1% sample → Pandas
         df_sample = df_sample.reset_index()
         print('Evaluation Sample dataframe for vitals:')
         print(df_sample.info())

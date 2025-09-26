@@ -187,6 +187,14 @@ class vitalsImputeNew:
 
         return df_filled
     
+
+    def fill_temperature(g, col='temperature', edge_limit=None):
+        # Forward fill
+        g[col] = g[col].ffill(limit=edge_limit)
+        # Backward fill
+        g[col] = g[col].bfill(limit=edge_limit)
+        return g
+        
     # def prepareVitals(self, run_xgb=True):
     #     """
     #     Full pipeline: clean → interpolate → (optional) refine with XGBoost.

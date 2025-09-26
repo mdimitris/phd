@@ -10,8 +10,9 @@ from sklearn.linear_model import BayesianRidge
 from sklearn.metrics import mean_absolute_error, mean_squared_error,r2_score,roc_auc_score
 import InputData
 import xgboost as xgb
+import random
 
-class evaluation:
+class Evaluation:
     # --------------------------------------------------------
     # 1. Setup
     # --------------------------------------------------------
@@ -119,7 +120,7 @@ class evaluation:
             results.append({
                 "Feature": col,
                 "MAE": np.mean(maes),
-                # "MSE": np.mean(mses),
+                #"MSE": np.mean(mses),
                 "RMSE": np.sqrt(np.mean(mses)),
                 "R2": np.mean(r2s),
             })
@@ -129,56 +130,73 @@ class evaluation:
 
 
     def evaluate_xgboost_filling(self, frac=0.2, mask_rate=0.3, n_runs=3):
+            """
+            Example: evaluate XGBoost filling (requires trained self.models)
+            """
+            results = []
+            df_full = pd.read_parquet("filled/vitals_filled.parquet")
+            df_sample = df_full.sample(frac=frac, random_state=42)
+
+            for target, (model, feature_cols) in self.models.items():
+                print(f"\n📊 Evaluating {target}...")
+                maes, rmses, r2s = [], [], []
+                for _ in range(n_runs):
+                    known_idx = df_sample[target].dropna().index
+                    if len(known_idx) < 10:
+                        continue
+
+                    masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
+                    true_vals = df_sample.loc[masked_idx, target]
+                    df_sample.loc[masked_idx, target] = np.nan
+
+                    X_eval = df_sample.loc[masked_idx, feature_cols]
+                    valid_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
+                    X_eval, true_vals = X_eval[valid_mask], true_vals[valid_mask]
+
+                    if len(true_vals) == 0:
+                        continue
+
+                    y_pred = model.predict(X_eval)
+
+                    maes.append(mean_absolute_error(true_vals, y_pred))
+                    rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
+                    r2s.append(r2_score(true_vals, y_pred))
+
+                if maes:
+                    results.append({
+                        "Feature": target,
+                        "MAE": np.mean(maes),
+                        "RMSE": np.mean(rmses),
+                        "R2": np.mean(r2s)
+                    })
+
+            eval_df = pd.DataFrame(results)
+            # print("\n📊 XGBoost Evaluation Results:")
+            # print(eval_df)
+            return eval_df
+
+
+    def missing_report(self, ddf):
         """
-        Evaluate XGBoost imputation by masking known values and checking accuracy.
-        Requires self.models trained with xgboost_refine().
+        Report the count and percentage of missing values for each checking column.
+        
+        Args:
+            ddf (dask.DataFrame): The Dask DataFrame to analyze.
+
+        Returns:
+            pd.DataFrame: A summary of missing counts and percentages.
         """
-        import pandas as pd, numpy as np, random
-        from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+        # counts
+        missing_counts = ddf[self.columns_to_fill].isna().sum().compute()
+        # percentages
+        missing_pct = (ddf[self.columns_to_fill].isna().mean().compute() * 100).round(2)
 
-        df_full = pd.read_parquet("filled/vitals_filled.parquet")
-        df_sample = df_full.sample(frac=frac, random_state=42)
+        summary = pd.DataFrame({
+            "MissingCount": missing_counts,
+            "MissingPct": missing_pct
+        })
 
-        results = []
-        for target, (model, feature_cols) in self.models.items():
-            print(f"\n📊 Evaluating {target}...")
+        print("\n📊 Missing Values Report:")
+        print(summary)
 
-            maes, mses, rmses, r2s = [], [], [], []
-            for _ in range(n_runs):
-                df_eval = df_sample.copy()
-                known_idx = df_eval[target].dropna().index
-                if len(known_idx) < 10:
-                    continue
-
-                masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
-                true_vals = df_eval.loc[masked_idx, target]
-                df_eval.loc[masked_idx, target] = np.nan
-
-                X_eval = df_eval.loc[masked_idx, feature_cols]
-                eval_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
-                X_eval, true_vals = X_eval[eval_mask], true_vals[eval_mask]
-
-                if len(true_vals) == 0:
-                    continue
-
-                y_pred = model.predict(X_eval)
-
-                maes.append(mean_absolute_error(true_vals, y_pred))
-                mses.append(mean_squared_error(true_vals, y_pred))
-                rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
-                r2s.append(r2_score(true_vals, y_pred))
-
-            if maes:
-                results.append({
-                    "Feature": target,
-                    "MAE": np.mean(maes),
-                    "MSE": np.mean(mses),
-                    "RMSE": np.mean(rmses),
-                    "R2": np.mean(r2s),
-                    "Runs": len(maes)
-                })
-
-        eval_df = pd.DataFrame(results)
-        print("\n📊 XGBoost Evaluation Results:")
-        print(eval_df)
-        return eval_df
+        return summary

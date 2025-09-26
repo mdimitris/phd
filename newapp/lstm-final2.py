@@ -5,11 +5,12 @@ import glucoseImpute as gl
 import gasesImpute as ga 
 import numpy as np
 import InputData as input
-import evaluation as ev
+import Evaluation as ev
 import dask.dataframe as dd
 from dask.distributed import Client
 import pyarrow.parquet as pa
-
+import os
+import xgBoostFill as xg
 
 # Start Dask client (4 cores)
 # if __name__ == "__main__":
@@ -17,78 +18,123 @@ import pyarrow.parquet as pa
 #     print(client)  # Optional: view cluster info
 
 #------------24 hours-------------#
-rows=100000
+directory="filled/vitals_filled.parquet"
 
-dtypes = {
-    "label_sepsis_within_6h": "Int8",
-    "label_sepsis_within_8h": "Int8",
-    "label_sepsis_within_12h": "Int8",
-    "gender": "Int8",
-    "sepsis_label": "Int8",
-    "label_sepsis_within_24h": "Int8",
-    "hospstay_seq" : "Int8", 
-    "hour_index_rev" : "Int8",
-    "hospital_expire_flag":"Int8",
-    "icustay_seq": "Int8",
-    "sepsis_label" : "Int8",
-    "gcs_time": "object"
-}
-
-
-
-
-
-#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
-
-# df_sample = pd.read_csv(
-#     r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
-#     #'/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
-#     sep='|',
-#     dtype=dtypes,
-#     nrows=8000)
-# print(df_sample.dtypes)
-# df_sample.to_csv("df_sample.csv", sep="|", index=False)
-# bad_mask = df_sample.apply(lambda col: col.astype(str).str.contains("2145-08-06", na=False))
-# bad_locs = bad_mask.any(axis=1)
-# print(df_sample.loc[bad_locs].head(5))
-# df_vitals = dd.from_pandas(df_sample, npartitions=1)
-#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
-
-df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
-time_interval=15 
-# 2. Create the imputer object 
-imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 
-# 3. Prepare and impute the data
-clean_df = imputer.prepareVitals()
 
-# Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
-#df_filled = dd.read_csv("filled/vitals_filled-*.csv")
-df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+if os.listdir(directory) == []:
 
-#df_filled = pa.read_table('filled/vitals_filled.parquet')
+        rows=100000
 
-# Step 3: Run evaluation
-# simulate_and_evaluate_dask_filling
+        dtypes = {
+            "label_sepsis_within_6h": "Int8",
+            "label_sepsis_within_8h": "Int8",
+            "label_sepsis_within_12h": "Int8",
+            "gender": "Int8",
+            "sepsis_label": "Int8",
+            "label_sepsis_within_24h": "Int8",
+            "hospstay_seq" : "Int8", 
+            "hour_index_rev" : "Int8",
+            "hospital_expire_flag":"Int8",
+            "icustay_seq": "Int8",
+            "sepsis_label" : "Int8",
+            "gcs_time": "object"
+        }
 
-vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
+        #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
-evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
+        # df_sample = pd.read_csv(
+        #     r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
+        #     #'/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
+        #     sep='|',
+        #     dtype=dtypes,
+        #     nrows=8000)
+        # print(df_sample.dtypes)
+        # df_sample.to_csv("df_sample.csv", sep="|", index=False)
+        # bad_mask = df_sample.apply(lambda col: col.astype(str).str.contains("2145-08-06", na=False))
+        # bad_locs = bad_mask.any(axis=1)
+        # print(df_sample.loc[bad_locs].head(5))
+        # df_vitals = dd.from_pandas(df_sample, npartitions=1)
+        #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
 
-print(evaluation_results)
-exit()
+        df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+
+        time_interval=15 
+        # 2. Create the imputer object 
+        imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 
+        # 3. Prepare and impute the data
+        clean_df = imputer.prepareVitals()
+
+        # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
+        #df_filled = dd.read_csv("filled/vitals_filled-*.csv")
+        df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+
+        #df_filled = pa.read_table('filled/vitals_filled.parquet')
+
+        # Step 3: Run evaluation
+        # simulate_and_evaluate_dask_filling
+
+        vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
+
+        evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
+
+        print(evaluation_results)
+        exit()
+
+else:
+        def fill_temperature(g, col='temperature', edge_limit=None):
+                
+                # Forward fill
+                g[col] = g[col].ffill(limit=edge_limit)
+                # Backward fill
+                g[col] = g[col].bfill(limit=edge_limit)
+                return g
+        
+        #reRun temperature filling because of sparcity
+        df_temp = pd.read_parquet("filled/vitals_filled.parquet")
+        df_temp = df_temp.sort_values(['stay_id', 'charttime'])
+        print('start refilling temperature')
+        df_temp = df_temp.groupby('stay_id').apply(fill_temperature)
+
+        df_temp.to_parquet("filled/temperature_filled.parquet")
 
 
-# 2. Run XGBoost refinement
-imputer.xgboost_refine(frac=0.8)
+        # 2. Run XGBoost refinement
+         #read the parquet files from the interpolation
+        print('start xgboost filling process for vitals')
+        ddf = dd.read_parquet("filled/vitals_filled.parquet")
+        checking_columns.append('temperature')
+        features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
+        df_sample = ddf.sample(frac=0.9).compute()  # small representative sample
+        
+        xgbImputer = xg.xgBoostFill(
+                target_columns=checking_columns,
+                features=features_columns,
+                random_state=42
+        )
+        xgbImputer.fit(df_sample)
 
-# 3. Evaluate XGBoost
-xgb_evaluator = ev.evaluation(None, imputer.get_checkingColumns(), mask_rate=0.5, n_runs=3)
-xgb_evaluator.models = imputer.models  # reuse trained models
-xgb_results = xgb_evaluator.evaluate_xgboost_filling(frac=0.2, mask_rate=0.3, n_runs=3)
-print("XGBoost results:\n", xgb_results)
+        ddf_filled = ddf.map_partitions(xgbImputer.transform)
+        ddf_filled = ddf_filled.persist()
+        ddf_filled.to_parquet("filled/vitals_xgb_filled.parquet", write_index=False)
+        # # 3. Evaluate XGBoost
+# 7. Evaluate on a pandas sample using your evaluation class
+        xgboost_evaluator = ev.Evaluation(ddf_filled, checking_columns, mask_rate=0.3, n_runs=3)
+        xgboost_evaluator.models = {col: (model, [f for f in features_columns if f != col])
+                        for col, model in xgbImputer.models.items()}
 
-exit()
+        results = xgboost_evaluator.evaluate_xgboost_filling(frac=0.8, mask_rate=0.3, n_runs=3)
+        print(results)
+        # Check missing values only in checkingColumns
+        missing_summary_xgboost = xgboost_evaluator.missing_report(ddf_filled)
+        # print("🧐 Missing values per vital column after XGBoost:")
+        # print(missing_summary_xgboost[missing_summary_xgboost > 0])
+
+        # xgb_evaluator.models = imputer.models  # reuse trained models
+        # xgb_results = xgb_evaluator.evaluate_xgboost_filling(frac=0.2, mask_rate=0.3, n_runs=3)
+        # print("XGBoost results:\n", xgb_results)
+
+        exit()
 
 # Blood gases data
 df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')

@@ -188,7 +188,7 @@ class vitalsImputeNew:
         return df_filled
     
 
-    def fill_temperature(g, col='temperature', edge_limit=None):
+    def fill_temperature(g, col='temperature', edge_limit=4):
         # Forward fill
         g[col] = g[col].ffill(limit=edge_limit)
         # Backward fill

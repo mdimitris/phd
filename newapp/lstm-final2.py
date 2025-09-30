@@ -82,7 +82,7 @@ if os.listdir(directory) == []:
         exit()
 
 else:
-        def fill_temperature(g, col='temperature', edge_limit=None):
+        def fill_temperature(g, col='temperature', edge_limit=4):
                 
                 # Forward fill
                 g[col] = g[col].ffill(limit=edge_limit)
@@ -96,29 +96,32 @@ else:
         print('start refilling temperature')
         df_temp = df_temp.groupby('stay_id').apply(fill_temperature)
 
-        df_temp.to_parquet("filled/temperature_filled.parquet")
+        df_temp.to_parquet("filled/temperature_filled.parquet", index=False)
 
 
         # 2. Run XGBoost refinement
          #read the parquet files from the interpolation
         print('start xgboost filling process for vitals')
-        ddf = dd.read_parquet("filled/vitals_filled.parquet")
+        ddf = dd.read_parquet("filled/temperature_filled.parquet")
+        
         checking_columns.append('temperature')
         features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
-        df_sample = ddf.sample(frac=0.9).compute()  # small representative sample
+        
         
         xgbImputer = xg.xgBoostFill(
                 target_columns=checking_columns,
                 features=features_columns,
                 random_state=42
         )
+        cleaned_ddf = xgbImputer.clean_dtypes(ddf)
+        df_sample = cleaned_ddf.sample(frac=0.9).compute()  # small representative sample
         xgbImputer.fit(df_sample)
-
-        ddf_filled = ddf.map_partitions(xgbImputer.transform)
+        meta = xgbImputer.clean_dtypes(ddf._meta)
+        ddf_filled = ddf.map_partitions(xgbImputer.transform, meta=meta)
         ddf_filled = ddf_filled.persist()
         ddf_filled.to_parquet("filled/vitals_xgb_filled.parquet", write_index=False)
         # # 3. Evaluate XGBoost
-# 7. Evaluate on a pandas sample using your evaluation class
+        # 7. Evaluate on a pandas sample using your evaluation class
         xgboost_evaluator = ev.Evaluation(ddf_filled, checking_columns, mask_rate=0.3, n_runs=3)
         xgboost_evaluator.models = {col: (model, [f for f in features_columns if f != col])
                         for col, model in xgbImputer.models.items()}

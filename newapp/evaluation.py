@@ -135,6 +135,7 @@ class Evaluation:
             """
             results = []
             df_full = pd.read_parquet("filled/vitals_filled.parquet")
+            df_full = xgb.clean_dtypes(df_full)
             df_sample = df_full.sample(frac=frac, random_state=42)
 
             for target, (model, feature_cols) in self.models.items():

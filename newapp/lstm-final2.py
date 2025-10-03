@@ -4,7 +4,7 @@ import labsImpute as lb
 import glucoseImpute as gl 
 import gasesImpute as ga 
 import numpy as np
-import InputData as input
+import InputData
 import Evaluation as ev
 import dask.dataframe as dd
 from dask.distributed import Client
@@ -79,10 +79,21 @@ if os.listdir(directory) == []:
         evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
 
         print(evaluation_results)
-        exit()
+        
+        
 
 else:
-        def fill_temperature(g, col='temperature', edge_limit=4):
+        # df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+
+        # imputer = vi.vitalsImputeNew(df_filled,checking_columns,15) 
+
+        # vitals_evaluator = ev.Evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
+
+        # evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
+        # print('evaluation_results for ffill bfill:')
+        # print(evaluation_results)
+
+        def fill_temperature(g, col='temperature', edge_limit=3):
                 
                 # Forward fill
                 g[col] = g[col].ffill(limit=edge_limit)
@@ -91,43 +102,55 @@ else:
                 return g
         
         #reRun temperature filling because of sparcity
-        df_temp = pd.read_parquet("filled/vitals_filled.parquet")
-        df_temp = df_temp.sort_values(['stay_id', 'charttime'])
-        print('start refilling temperature')
-        df_temp = df_temp.groupby('stay_id').apply(fill_temperature)
+        # df_temp = pd.read_parquet("filled/vitals_filled.parquet")
+        # df_temp = df_temp.sort_values(['stay_id', 'charttime'])
+        # print('start refilling temperature')
+        # df_temp = df_temp.groupby('stay_id').apply(fill_temperature)
 
-        df_temp.to_parquet("filled/temperature_filled.parquet", index=False)
+        # df_temp.to_parquet("filled/temperature_filled.parquet", index=False)
 
 
         # 2. Run XGBoost refinement
          #read the parquet files from the interpolation
         print('start xgboost filling process for vitals')
-        ddf = dd.read_parquet("filled/temperature_filled.parquet")
+        ddf = dd.read_parquet("filled/vitals_filled.parquet")
         
         checking_columns.append('temperature')
         features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
-        
         
         xgbImputer = xg.xgBoostFill(
                 target_columns=checking_columns,
                 features=features_columns,
                 random_state=42
         )
-        cleaned_ddf = xgbImputer.clean_dtypes(ddf)
-        df_sample = cleaned_ddf.sample(frac=0.9).compute()  # small representative sample
+        cleaned_ddf = InputData.clean_dtypes(ddf)
+        df_sample = cleaned_ddf.sample(frac=0.4).compute()  # small representative sample
         xgbImputer.fit(df_sample)
-        meta = xgbImputer.clean_dtypes(ddf._meta)
+        meta = InputData.clean_dtypes(ddf._meta)
         ddf_filled = ddf.map_partitions(xgbImputer.transform, meta=meta)
         ddf_filled = ddf_filled.persist()
         ddf_filled.to_parquet("filled/vitals_xgb_filled.parquet", write_index=False)
         # # 3. Evaluate XGBoost
         # 7. Evaluate on a pandas sample using your evaluation class
-        xgboost_evaluator = ev.Evaluation(ddf_filled, checking_columns, mask_rate=0.3, n_runs=3)
-        xgboost_evaluator.models = {col: (model, [f for f in features_columns if f != col])
-                        for col, model in xgbImputer.models.items()}
+        xgboost_evaluator = ev.Evaluation(
+        columns_to_fill=checking_columns, 
+        mask_rate=0.3, 
+        n_runs=3
+        )
 
-        results = xgboost_evaluator.evaluate_xgboost_filling(frac=0.8, mask_rate=0.3, n_runs=3)
-        print(results)
+        results = []
+        for col in checking_columns:
+                res = xgboost_evaluator.evaluate(df_sample, col, mask_frac=0.3, n_runs=3)
+                results.append(res)
+
+        results_df = pd.DataFrame(results)
+        print(results_df)
+        # xgboost_evaluator = ev.Evaluation(ddf_filled, checking_columns, mask_rate=0.3, n_runs=3)
+        # xgboost_evaluator.models = {col: (model, [f for f in features_columns if f != col])
+        #                 for col, model in xgbImputer.models.items()}
+
+        # results = xgboost_evaluator.evaluate_xgboost_filling(frac=0.8, mask_rate=0.3, n_runs=3)
+        # print(results)
         # Check missing values only in checkingColumns
         missing_summary_xgboost = xgboost_evaluator.missing_report(ddf_filled)
         # print("🧐 Missing values per vital column after XGBoost:")
@@ -136,8 +159,8 @@ else:
         # xgb_evaluator.models = imputer.models  # reuse trained models
         # xgb_results = xgb_evaluator.evaluate_xgboost_filling(frac=0.2, mask_rate=0.3, n_runs=3)
         # print("XGBoost results:\n", xgb_results)
-
         exit()
+
 
 # Blood gases data
 df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
@@ -146,7 +169,7 @@ gases = ga.gasesImpute(df_bloodGases,gases_columns,24)
 df_gases=gases.prepareGases()
 
 
-
+exit()
 # Glucose and creatinine data
 df_glucoCreat = dd.read_csv('/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv',  sep='|')
 
@@ -155,12 +178,6 @@ gl_columns = ["creatinine","glucose"]
 glucCreat = gl.glucoseImpute(df_glucoCreat,gl_columns,3600)
 glucCreat_df = glucCreat.prepareGlucose()
 print("Glucose and creatine df after optimization:")
-
-# imputed_gluc = glucCreat.imputeGlucose(glucCreat_df,3600,gl_columns)
-# print(imputed_gluc.info())
-# read the patient vitals nrows=50000,
-# Vitals data
-#df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
 
 
 #Delete initial dataframes to gain memory
@@ -172,9 +189,9 @@ del df_vitals
 
 print('final vitals info after normalization:')
 # print(clean_df.compute().info())
-exit()
+
 #-------Blood lab results preparation-------#
-df_bloodResults = pd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')
+df_bloodResults = dd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')
 lab_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
 time_interval = 3600
 
@@ -189,7 +206,7 @@ bloodResults = labResult.prepareLabs()
 
 exit()
 #merge vitals and blood
-df_vitals_blood = input.mergeDataframes(bloodResults, lab_columns, glucCreat_df, gl_columns, clean_df,df_gases,gases_columns)
+df_vitals_blood = inputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, gl_columns, clean_df,df_gases,gases_columns)
 print('final dataset df_vitals_blooexitd:')
 print(df_vitals_blood.info())     
 print(df_vitals_blood.head()) 

@@ -4,6 +4,7 @@ import xgboost as xgb
 import os
 import numpy as np
 import lightgbm as lgb
+import InputData
 
 class xgBoostFill:
     """
@@ -16,12 +17,9 @@ class xgBoostFill:
         self.features = features
         self.random_state = random_state
         self.models = {}
-
-
-    def clean_dtypes(self,df):
+    
+    def clean_dtypes(self, df):
         df = df.copy()
-
-        # ✅ force numeric columns to float and round to 2 decimals
         numeric_cols = [
             "admission_age", "los_hospital", "los_icu",
             "sbp", "dbp", "pulse_pressure",
@@ -31,47 +29,42 @@ class xgBoostFill:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32").round(2)
 
-        # ✅ keep seq columns as integers
         if "hospstay_seq" in df.columns:
             df["hospstay_seq"] = pd.to_numeric(df["hospstay_seq"], errors="coerce").astype("int8")
         if "icustay_seq" in df.columns:
             df["icustay_seq"] = pd.to_numeric(df["icustay_seq"], errors="coerce").astype("int8")
-        
         if "gender" in df.columns:
-            df["gender"] = df["gender"].astype("float32")      # convert from object/str
-            df["gender"] = df["gender"].fillna(0).astype("int8")  # ensure int8
-
-                #df["gender"] = df["gender"].cat.codes.replace(-1, 0).astype("int8")
+            df["gender"] = pd.to_numeric(df["gender"], errors="coerce").fillna(0).astype("int8")
         return df
-    
+
+    def short_gap_fill(self, g, col, edge_limit=4):
+        """Fill only small gaps forward/backward."""
+        g[col] = g[col].ffill(limit=edge_limit)
+        g[col] = g[col].bfill(limit=edge_limit)
+        return g
 
     def fit(self, data):
-        """
-        Trains a LightGBM regressor for each target column with missing values.
-        
-        Args:
-            data (pd.DataFrame): pandas DataFrame (sample from your Dask DataFrame).
-        """
-        print("Training LightGBM models for imputation...")
+        print("Training hybrid imputers...")
 
-        # Clean dtypes of full input once
         data = self.clean_dtypes(data)
 
         for col in self.target_columns:
-            # Drop the current target column from features
-            current_features = [f for f in self.features if f != col]
-
-            # Keep only rows where target exists
-            train_data = data.dropna(subset=[col])
-            if train_data.empty:
-                print(f"Skipping training for '{col}' due to no complete cases.")
+            # handle temperature separately
+            if col == "temperature":
+                print("Skipping model training for temperature (hybrid strategy).")
+                continue
+            if col == "spo2":
+                print("Skipping model training for SpO₂ (will use simple fill).")
                 continue
 
-            # Features and target
-            X_train = train_data[current_features]
-            y_train = train_data[col]
+            current_features = [f for f in self.features if f != col]
+            train_data = data.dropna(subset=[col])
+            if train_data.empty:
+                continue
 
-            # Model definition
+            X_train = self.clean_dtypes(train_data[current_features])
+            y_train = pd.to_numeric(train_data[col], errors="coerce").astype("float32").round(2)
+
             model = lgb.LGBMRegressor(
                 objective="regression",
                 n_estimators=500,
@@ -80,124 +73,40 @@ class xgBoostFill:
                 random_state=self.random_state,
                 n_jobs=-1
             )
-
-            # ✅ Ensure dtypes before training
-            X_train = self.clean_dtypes(X_train)
-            y_train = pd.to_numeric(y_train, errors="coerce").astype("float32").round(2)
-
-            # Train model
             model.fit(X_train, y_train)
             self.models[col] = model
 
-        print("Models have been trained for all specified vital signs columns.")
         return self
 
-
-
-    # def fit(self, data):
-    #     """
-    #     Trains an XGBoost regressor for each target column with missing values.
-        
-    #     This method is designed to be called on a pandas DataFrame (a sample of your
-    #     full Dask DataFrame).
-
-    #     Args:
-    #         data (pd.DataFrame): The DataFrame to train on. This should be a representative
-    #                              sample of your full dataset.
-    #     """
-    #     print("Training XGBoost models for imputation...")
-    #     data = self.clean_dtypes(data)
-
-    #     for col in self.target_columns:
-    #         # Drop the current target column from the feature list for this specific model
-    #         current_features = [f for f in self.features if f != col]
-            
-    #         # Filter out rows with missing values for the current target column
-    #         train_data = data.dropna(subset=[col])
-            
-    #         if train_data.empty:
-    #             print(f"Skipping training for '{col}' due to no complete cases.")
-    #             continue
-
-    #         # Features and target
-    #         X_train = train_data[current_features]
-    #         y_train = train_data[col]
-
-    #         # Prepare features and target for training
-    #         # X_train = train_data[current_features]
-    #         # y_train = train_data[col]
-
-    #         X_train = self.clean_dtypes(X_train)
-    #         y_train = pd.to_numeric(y_train, errors="coerce").astype("float32").round(2)
-
-    #         model = lgb.LGBMRegressor(
-    #         objective='regression',   # LightGBM regression objective
-    #         n_estimators=500,         # same as boosting_rounds
-    #         learning_rate=0.01,
-    #         max_depth=6,
-    #         random_state=self.random_state,
-    #         n_jobs=-1
-    #     )
-            
-    #         # Initialize and train the XGBoost regressor
-    #         # model = xgb.XGBRegressor(
-    #         #     objective='reg:squarederror', 
-    #         #     n_estimators=500, 
-    #         #     learning_rate=0.01,
-    #         #     max_depth=6, 
-    #         #     random_state=self.random_state,
-    #         #     n_jobs=-1  # Use all available CPU cores
-    #         # )
-    #         # X_train = self.clean_dtypes(X_train)
-            
-
-    #         model.fit(X_train, y_train)
-    #         self.models[col] = model
-    #     print("Models have been trained for all specified vital signs columns.")
-    #     return self
-
     def transform(self, data):
-        """
-        Uses the trained models to fill missing values in the target columns.
-        
-        This method is designed to be called on a pandas DataFrame partition by Dask.
+        filled = data.copy()
+        filled = self.clean_dtypes(filled)
 
-        Args:
-            data (pd.DataFrame): The DataFrame partition to be transformed.
-        
-        Returns:
-            pd.DataFrame: A new DataFrame with the missing values filled.
-        """
-        filled_data = data.copy()
-        filled_data = self.clean_dtypes(filled_data) 
-        
-        for col, model in self.models.items():
-            # Drop the current target column from the feature list for prediction
-            current_features = [f for f in self.features if f != col]
+        for col in self.target_columns:
+            missing_idx = filled[filled[col].isnull()].index
+            if missing_idx.empty:
+                continue
+
+            if col == "temperature":
+                # First short-gap ffill/bfill
+                filled = self.short_gap_fill(filled, col)
+                # If still missing, use median
+                if filled[col].isnull().sum() > 0:
+                    filled[col] = filled[col].fillna(filled[col].median())
             
-            # Identify rows with missing values to be predicted
-            missing_indices = filled_data[filled_data[col].isnull()].index
-            
-            if not missing_indices.empty:
-                # Prepare features for prediction
-                X_predict = filled_data.loc[missing_indices, current_features]
-                X_predict = self.clean_dtypes(X_predict)
-                
-                # Predict the missing values
-                predictions = model.predict(X_predict)
-                
-                # Fill the missing values in the copied DataFrame
-                filled_data.loc[missing_indices, col] = predictions
-                # print(f"Filled {len(missing_indices)} missing values in column '{col}' for this partition.")
+            elif col == "spo2":
+                # Simple median fill for spo2
+                filled[col] = filled[col].fillna(filled[col].median())
+
             else:
-                # print(f"No missing values to fill in column '{col}' for this partition.")
-                pass
-                
-        return filled_data
+                # Use LightGBM for the rest
+                model = self.models.get(col)
+                if model:
+                    X_pred = self.clean_dtypes(filled.loc[missing_idx, [f for f in self.features if f != col]])
+                    preds = model.predict(X_pred).astype(filled[col].dtype)
+                    filled.loc[missing_idx, col] = preds
+        return filled
 
     def fit_transform(self, data):
-        """
-        Fits the models and then transforms the data in one step.
-        """
         self.fit(data)
         return self.transform(data)

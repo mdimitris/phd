@@ -4,6 +4,32 @@ import dask.dataframe as dd
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 
+def clean_dtypes(df):
+        df = df.copy()
+
+        # ✅ force numeric columns to float and round to 2 decimals
+        numeric_cols = [
+            "admission_age", "los_hospital", "los_icu",
+            "sbp", "dbp", "pulse_pressure",
+            "heart_rate", "resp_rate", "mbp", "temperature", "spo2"
+        ]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32").round(2)
+
+        # ✅ keep seq columns as integers
+        if "hospstay_seq" in df.columns:
+            df["hospstay_seq"] = pd.to_numeric(df["hospstay_seq"], errors="coerce").astype("int8")
+        if "icustay_seq" in df.columns:
+            df["icustay_seq"] = pd.to_numeric(df["icustay_seq"], errors="coerce").astype("int8")
+        
+        if "gender" in df.columns:
+            df["gender"] = df["gender"].astype("float32")      # convert from object/str
+            df["gender"] = df["gender"].fillna(0).astype("int8")  # ensure int8
+
+                #df["gender"] = df["gender"].cat.codes.replace(-1, 0).astype("int8")
+        return df
+
 
 def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Replace "NULL" with NaN

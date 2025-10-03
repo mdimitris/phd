@@ -11,6 +11,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error,r2_score,roc
 import InputData
 import xgboost as xgb
 import random
+import InputData
 
 class Evaluation:
     # --------------------------------------------------------
@@ -135,7 +136,7 @@ class Evaluation:
             """
             results = []
             df_full = pd.read_parquet("filled/vitals_filled.parquet")
-            df_full = xgb.clean_dtypes(df_full)
+            df_full = InputData.clean_dtypes(df_full)
             df_sample = df_full.sample(frac=frac, random_state=42)
 
             for target, (model, feature_cols) in self.models.items():
@@ -201,3 +202,5 @@ class Evaluation:
         print(summary)
 
         return summary
+
+        

@@ -178,21 +178,22 @@ else:
         # # xgb_evaluator.models = imputer.models  # reuse trained models
         # # xgb_results = xgb_evaluator.evaluate_xgboost_filling(frac=0.2, mask_rate=0.3, n_runs=3)
         # # print("XGBoost results:\n", xgb_results)
-        
-
- 
+         
         # Blood gases data
-        df_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        #df_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
         
-        #df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
+        df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
         gases_columns = ['paco2', 'fio2', 'pao2']
         gases_imputer = ga.gasesImpute(df_bloodGases,gases_columns,24)
         df_gases=gases_imputer.prepareGases()
 
         df_gases.to_parquet("filled/gases_filled.parquet", write_index=False)
-        gases_evaluator = ev.Evaluation(gases_imputer,df_bloodGases,gases_imputer.get_columns(), mask_rate=0.5,n_runs=3)
-        gases_evaluation_results = gases_evaluator.simulate_and_evaluate_dask_filling()
-        print(gases_evaluation_results)
+
+        evaluator = ev.Evaluation(imputer=gases_imputer, data=df_bloodGases,
+                        columns_to_fill=gases_columns,
+                        mask_rate=0.2, n_runs=3)
+
+        results, summary = evaluator.evaluate_filling_performance(df_bloodGases, df_gases)
 
         exit()
         # Glucose and creatinine data

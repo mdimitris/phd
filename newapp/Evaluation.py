@@ -88,9 +88,9 @@ class Evaluation:
 
                 if 'paco2' in df_copy.columns:
                         
+                        df_gases=gases_imputer.prepareGases()
                         ddf_filled = ddf_masked.map_partitions(
-                        gi.gasesImpute.imputeGases,
-                        self.columns_to_fill
+                        gi.gasesImpute.imputeGases
                     )
 
                 else:
@@ -179,7 +179,7 @@ class Evaluation:
                     y_pred = model.predict(X_eval)
 
                     maes.append(mean_absolute_error(true_vals, y_pred))
-                    rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
+                    rmses.append(np.sqrt(root_mean_squared_error(true_vals, y_pred)))
                     r2s.append(r2_score(true_vals, y_pred))
 
                 if maes:
@@ -274,3 +274,64 @@ class Evaluation:
         r2 = r2_score(true_vals, preds)
 
         return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}
+    
+    
+    def evaluate_filling_performance(self, original_df, filled_df, columns=None):
+        """
+        Evaluate the quality of imputation (MAE, RMSE, R²) between original and filled DataFrames.
+        
+        Parameters:
+            original_df (pd.DataFrame or dd.DataFrame): Ground truth data (before masking).
+            filled_df (pd.DataFrame or dd.DataFrame): Data after imputation.
+            columns (list): Columns to evaluate. Defaults to self.columns_to_fill.
+
+        Returns:
+            pd.DataFrame: Metrics (MAE, RMSE, R²) per column + overall mean.
+        """
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        import numpy as np
+        import pandas as pd
+        import dask.dataframe as dd
+
+        if columns is None:
+            columns = self.columns_to_fill
+
+        # Convert to pandas if needed
+        if isinstance(original_df, dd.DataFrame):
+            print("Computing Dask DataFrames to Pandas for evaluation...")
+            original_df = original_df.compute()
+        if isinstance(filled_df, dd.DataFrame):
+            filled_df = filled_df.compute()
+
+        results = []
+        for col in columns:
+            mask = original_df[col].notna() & filled_df[col].notna()
+            if mask.sum() == 0:
+                print(f"⚠️ Skipping {col} — no overlapping non-null values.")
+                continue
+
+            y_true = original_df.loc[mask, col]
+            y_pred = filled_df.loc[mask, col]
+
+            mae = mean_absolute_error(y_true, y_pred)
+            rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+            r2 = r2_score(y_true, y_pred)
+
+            results.append({
+                "Feature": col,
+                "MAE": mae,
+                "RMSE": rmse,
+                "R2": r2
+            })
+
+        results_df = pd.DataFrame(results)
+        if not results_df.empty:
+            summary = results_df[["MAE", "RMSE", "R2"]].mean().to_dict()
+            print("\n📊 Column-wise metrics:")
+            print(results_df)
+            print("\n📈 Overall Summary:")
+            print({k: round(v, 4) for k, v in summary.items()})
+        else:
+            summary = {}
+
+        return results_df, summary

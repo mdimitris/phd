@@ -47,7 +47,7 @@ class gasesImpute:
     
         
     def imputeGases(self,df): 
-        print("Starting vitals imputation and filling process....")
+        print("Starting gases imputation and filling process....")
         import gc
         gc.collect()
         

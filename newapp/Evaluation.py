@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer
 from sklearn.linear_model import BayesianRidge
-from sklearn.metrics import mean_absolute_error, mean_squared_error,r2_score,roc_auc_score
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error,r2_score,roc_auc_score
 import InputData
 import xgBoostFill as xgbFill
 import random
@@ -28,8 +28,8 @@ class Evaluation:
         "mchc", "mcv", "rbc", "rdw", "glucose", "creatinine"
     ]
 
-    def __init__(self, data, columns_to_fill, mask_rate,n_runs):
-      
+    def __init__(self, imputer, data, columns_to_fill, mask_rate,n_runs):
+        self.imputer = imputer
         self.data = data
         self.columns_to_fill = columns_to_fill
         self.mask_rate = mask_rate       
@@ -60,7 +60,7 @@ class Evaluation:
         results = []
 
         # Work on a small sample (so we can compute in memory)
-        df_sample =  self.data.sample(frac=0.15).compute()  # 1% sample → Pandas
+        df_sample =  self.data.sample(frac=0.4).compute()  # 1% sample → Pandas
         df_sample = df_sample.reset_index()
         print('Evaluation Sample dataframe for vitals:')
         print(df_sample.info())
@@ -113,7 +113,7 @@ class Evaluation:
                 
                 # Metrics
                 maes.append(mean_absolute_error(true_vals, imputed_vals))
-                mses.append(mean_squared_error(true_vals, imputed_vals))
+                mses.append(root_mean_squared_error(true_vals, imputed_vals))
                 r2s.append(r2_score(true_vals, imputed_vals))
 
             print("start evaluation append")
@@ -181,6 +181,16 @@ class Evaluation:
             # print("\n📊 XGBoost Evaluation Results:")
             # print(eval_df)
             return eval_df
+        
+    def evaluate(self, df, col, mask_frac=0.2, n_runs=3):
+        results = []
+        for _ in range(n_runs):
+            res = self.evaluate_masking(df, col, mask_frac)
+            results.append(res)
+        
+        avg = pd.DataFrame(results).mean(numeric_only=True).to_dict()
+        avg["Feature"] = col   # ✅ Keep the feature name
+        return avg
 
 
     def missing_report(self, ddf):
@@ -207,3 +217,47 @@ class Evaluation:
         print(summary)
 
         return summary
+    
+    
+    def evaluate_masking(self, df, col, mask_frac=0.2, random_state=42):
+        """
+        Mask a fraction of observed values in a column, run the imputer,
+        and compute MAE, RMSE, R2 for the masked values.
+        """
+        rng = np.random.default_rng(random_state)
+        
+        # Make a copy so we don't alter original
+        df_copy = df.copy()
+
+        # Work per stay_id to avoid leakage across patients
+        results = []
+
+        for stay_id, group in df_copy.groupby("stay_id"):
+            observed_idx = group[group[col].notna()].index
+            if len(observed_idx) == 0:
+                continue
+
+            # Mask a fraction of observed values
+            mask_size = max(1, int(len(observed_idx) * mask_frac))
+            mask_idx = rng.choice(observed_idx, size=mask_size, replace=False)
+
+            true_vals = group.loc[mask_idx, col].copy()
+            df_copy.loc[mask_idx, col] = np.nan
+
+        # Run the full imputer (pipeline)
+        df_filled = self.imputer.transform(df_copy)
+
+        # Collect predictions for masked values
+        preds = df_filled.loc[mask_idx, col]
+
+        # Align and drop any remaining NaNs
+        mask = true_vals.notna() & preds.notna()
+        true_vals = true_vals[mask]
+        preds = preds[mask]
+
+        # Compute metrics
+        mae = mean_absolute_error(true_vals, preds)
+        rmse = root_mean_squared_error(true_vals, preds)
+        r2 = r2_score(true_vals, preds)
+
+        return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}

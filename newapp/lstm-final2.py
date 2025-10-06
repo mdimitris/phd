@@ -182,10 +182,13 @@ else:
 
  
         # Blood gases data
-        df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
+        df_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        
+        #df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
         gases_columns = ['paco2', 'fio2', 'pao2']
         gases_imputer = ga.gasesImpute(df_bloodGases,gases_columns,24)
         df_gases=gases_imputer.prepareGases()
+
         df_gases.to_parquet("filled/gases_filled.parquet", write_index=False)
         gases_evaluator = ev.Evaluation(gases_imputer,df_bloodGases,gases_imputer.get_columns(), mask_rate=0.5,n_runs=3)
         gases_evaluation_results = gases_evaluator.simulate_and_evaluate_dask_filling()

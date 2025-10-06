@@ -1,5 +1,6 @@
 import numpy as np
 import vitalsImputeNew
+import gasesImpute as gi
 import dask.dataframe as dd
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -84,14 +85,26 @@ class Evaluation:
 
                 # Convert back to Dask
                 ddf_masked = dd.from_pandas(df_copy, npartitions=4)
-                ddf_filled = ddf_masked.map_partitions(
-                    vitalsImputeNew.vitalsImputeNew.fillVitals_partition,
-                    self.columns_to_fill,
-                    meta=ddf_masked._meta
-                )
+
+                if 'paco2' in df_copy.columns:
+                        
+                        ddf_filled = ddf_masked.map_partitions(
+                        gi.gasesImpute.imputeGases,
+                        self.columns_to_fill
+                    )
+
+                else:
+                    ddf_filled = ddf_masked.map_partitions(
+                        vitalsImputeNew.vitalsImputeNew.fillVitals_partition,
+                        self.columns_to_fill,
+                        meta=ddf_masked._meta
+                    )
 
                 df_filled = ddf_filled.compute()
-                df_filled.dropna(subset = ['spo2', 'sbp', 'dbp','pulse_pressure','heart_rate','resp_rate','mbp','temperature'],inplace=True)
+                if 'paco2' in df_filled.columns:
+                    df_filled.dropna(subset = ['paco2', 'fio2', 'pao2'],inplace=True)
+                else:
+                    df_filled.dropna(subset = ['spo2', 'sbp', 'dbp','pulse_pressure','heart_rate','resp_rate','mbp','temperature'],inplace=True)
                
 
                 # Collect imputed values based on mask_flag

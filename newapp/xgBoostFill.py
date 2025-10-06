@@ -12,9 +12,10 @@ class xgBoostFill:
     It trains a separate XGBoost model for each target column with missing values,
     using other specified features to predict the missing data.
     """
-    def __init__(self, target_columns, features, random_state=42):
+    def __init__(self, target_columns, features, random_state=42,feature_map=None):
         self.target_columns = target_columns
         self.features = features
+        self.feature_map = feature_map or {}
         self.random_state = random_state
         self.models = {}
     
@@ -49,15 +50,16 @@ class xgBoostFill:
         data = self.clean_dtypes(data)
 
         for col in self.target_columns:
-            # handle temperature separately
-            if col == "temperature":
-                print("Skipping model training for temperature (hybrid strategy).")
-                continue
-            if col == "spo2":
-                print("Skipping model training for SpO₂ (will use simple fill).")
-                continue
+            # # handle temperature separately
+            # if col == "temperature":
+            #     print("Skipping model training for temperature (hybrid strategy).")
+            #     continue
+            # if col == "spo2":
+            #     print("Skipping model training for SpO₂ (will use simple fill).")
+            #     continue
 
             current_features = [f for f in self.features if f != col]
+            current_features = self.feature_map.get(col, [f for f in self.features if f != col])
             train_data = data.dropna(subset=[col])
             if train_data.empty:
                 continue
@@ -74,7 +76,9 @@ class xgBoostFill:
                 n_jobs=-1
             )
             model.fit(X_train, y_train)
-            self.models[col] = model
+            #self.models[col] = model
+            self.models[col] = (model, current_features)
+
 
         return self
 
@@ -87,24 +91,26 @@ class xgBoostFill:
             if missing_idx.empty:
                 continue
 
-            if col == "temperature":
-                # First short-gap ffill/bfill
-                filled = self.short_gap_fill(filled, col)
-                # If still missing, use median
-                if filled[col].isnull().sum() > 0:
-                    filled[col] = filled[col].fillna(filled[col].median())
-            
-            elif col == "spo2":
-                # Simple median fill for spo2
-                filled[col] = filled[col].fillna(filled[col].median())
+            # if col == "temperature":
+            #     # First short-gap ffill/bfill
+            #     filled = self.short_gap_fill(filled, col)
+            #     # If still missing, use median
+            #     if filled[col].isnull().sum() > 0:
+            #         filled[col] = filled[col].fillna(filled[col].median())
+
+            # elif col == "spo2":
+            #     # Simple median fill for spo2
+            #     filled[col] = filled[col].fillna(filled[col].median())
 
             else:
-                # Use LightGBM for the rest
-                model = self.models.get(col)
-                if model:
-                    X_pred = self.clean_dtypes(filled.loc[missing_idx, [f for f in self.features if f != col]])
+                # ✅ Retrieve (model, feature set) from self.models
+                model_tuple = self.models.get(col)
+                if model_tuple:
+                    model, feature_cols = model_tuple
+                    X_pred = self.clean_dtypes(filled.loc[missing_idx, feature_cols])
                     preds = model.predict(X_pred).astype(filled[col].dtype)
                     filled.loc[missing_idx, col] = preds
+
         return filled
 
     def fit_transform(self, data):

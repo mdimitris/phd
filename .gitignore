@@ -24,3 +24,6 @@ imputed_xgb/
 newapp/vitals_24_hours_final_demo.csv
 vitals_24_hours_final.csv
 newapp/__pycache__/
+newapp/__pycache__/gasesImpute.cpython-312.pyc
+newapp/__pycache__/InputData.cpython-312.pyc
+newapp/__pycache__/vitalsImputeNew.cpython-312.pyc

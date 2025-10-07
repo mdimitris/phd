@@ -36,35 +36,36 @@ class glucoseImpute:
         self.glucoseCreatinine['charttime'] = dd.to_datetime(self.glucoseCreatinine['charttime'])
         self.glucoseCreatinine[["subject_id","stay_id"]] = self.glucoseCreatinine[["subject_id","stay_id"]].astype(pd.Int32Dtype())
         self.glucoseCreatinine[self.columns] =self.glucoseCreatinine[self.columns].astype('float').astype('float32')
-        return self.glucoseCreatinine
+        return self.imputeGlucose (self.interval,self.columns)
     
-    def imputeGlucose (self,df,interval,cols):
+    def imputeGlucose (self,interval,cols):
         print("Starting glucose and creatinine imputation and filling process....")
         import gc
         gc.collect()
         
-        df.reset_index(inplace=True)
-        df.replace([-1, "missing", "NA"], np.nan)
+        #self.glucoseCreatinine.reset_index(inplace=True)
+        self.glucoseCreatinine.replace([-1, "missing", "NA"], np.nan)
 
         # Ensure proper datetime
-        df['charttime'] = pd.to_datetime(df['charttime'], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
-        df.sort_values(by=["subject_id", "stay_id", 'charttime'])
+        self.glucoseCreatinine['charttime'] = dd.to_datetime(self.glucoseCreatinine['charttime'], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
+        self.glucoseCreatinine.sort_values(by=["subject_id", "stay_id", 'charttime'])
 
         # Grouping for interpolation based on time gaps
-        df["group"] = df.groupby(["subject_id", "stay_id"])['charttime'].transform(
+        self.glucoseCreatinine = self.glucoseCreatinine.compute()
+        self.glucoseCreatinine["group"] = self.glucoseCreatinine.groupby(["subject_id", "stay_id"])['charttime'].transform(
             lambda x: (x.diff() > pd.Timedelta(minutes=interval)).cumsum())
 
         # 🕒 Add relative time (in minutes since first observation per stay)
-        df["relative_time_min"] = df.groupby(["subject_id", "stay_id"])["charttime"] \
+        self.glucoseCreatinine["relative_time_min"] = self.glucoseCreatinine.groupby(["subject_id", "stay_id"])["charttime"] \
                                     .transform(lambda x: (x - x.min()).dt.total_seconds() / 60)
 
         # 🕒 Optionally add time gap (between measurements)
-        df["time_gap_min"] = df.groupby(["subject_id", "stay_id"])["charttime"] \
+        self.glucoseCreatinine["time_gap_min"] = self.glucoseCreatinine.groupby(["subject_id", "stay_id"])["charttime"] \
                             .transform(lambda x: x.diff().dt.total_seconds() / 60).fillna(0)
         gc.collect()
         # Interpolation within each group
-        df[cols] = (
-            df.groupby(["subject_id", "stay_id", "group"], group_keys=False)
+        self.glucoseCreatinine[cols] = (
+            self.glucoseCreatinine.groupby(["subject_id", "stay_id", "group"], group_keys=False)
             .apply(lambda group: (
                 group.set_index("charttime")[cols]
                     .ffill()
@@ -75,4 +76,4 @@ class glucoseImpute:
             .reset_index(drop=True)
         )
         
-        return df
+        return self.glucoseCreatinine

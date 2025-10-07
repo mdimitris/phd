@@ -1,4 +1,5 @@
 import pandas as pd
+import InputData
 import vitalsImputeNew as vi
 import labsImpute as lb
 import glucoseImpute as gl 
@@ -181,39 +182,44 @@ else:
          
         # Blood gases data
         #df_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+ #the part of gases is ok. I comment it for later       
+        # df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
+        # gases_columns = ['paco2', 'fio2', 'pao2']
+        # gases_imputer = ga.gasesImpute(df_bloodGases,gases_columns,24)
+        # df_gases=gases_imputer.prepareGases()
+
+        # df_gases.to_parquet("filled/gases_filled.parquet", write_index=False)
+
+        # evaluator = ev.Evaluation(imputer=gases_imputer, data=df_bloodGases,
+        #                 columns_to_fill=gases_columns,
+        #                 mask_rate=0.2, n_runs=3)
+
+        # results, summary = evaluator.evaluate_filling_performance(df_bloodGases, df_gases)
+
         
-        df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
-        gases_columns = ['paco2', 'fio2', 'pao2']
-        gases_imputer = ga.gasesImpute(df_bloodGases,gases_columns,24)
-        df_gases=gases_imputer.prepareGases()
-
-        df_gases.to_parquet("filled/gases_filled.parquet", write_index=False)
-
-        evaluator = ev.Evaluation(imputer=gases_imputer, data=df_bloodGases,
-                        columns_to_fill=gases_columns,
-                        mask_rate=0.2, n_runs=3)
-
-        results, summary = evaluator.evaluate_filling_performance(df_bloodGases, df_gases)
-
-        exit()
         # Glucose and creatinine data
+        print("read and impute glucose and creatine:")
         df_glucoCreat = dd.read_csv('/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv',  sep='|')
 
 
-        gl_columns = ["creatinine","glucose"]
-        glucCreat = gl.glucoseImpute(df_glucoCreat,gl_columns,3600)
-        glucCreat_df = glucCreat.prepareGlucose()
-        print("Glucose and creatine df after optimization:")
+        glucCreat_columns = ["creatinine","glucose"]
+        glucCreat_imputer = gl.glucoseImpute(df_glucoCreat,glucCreat_columns,3600)
+        glucCreat_df = glucCreat_imputer.prepareGlucose()
+        print("Glucose and creatine save in parquet and start evaluation:")
+        print(glucCreat_df.info())
+        
+        glucCreat_df.to_parquet("filled/glucCreat_filled.parquet", index=False)
+        glucCreat_evaluator = ev.Evaluation(imputer=glucCreat_imputer, data=df_glucoCreat,
+                        columns_to_fill=glucCreat_columns,
+                        mask_rate=0.2, n_runs=3)
 
-
+        results, summary = glucCreat_evaluator.evaluate_filling_performance(df_glucoCreat, glucCreat_df)
+        
         #Delete initial dataframes to gain memory
         del df_glucoCreat
-        del df_bloodGases
-        del df_vitals
+        # del df_bloodGases
+        # del df_vitals
 
-
-
-        print('final vitals info after normalization:')
         # print(clean_df.compute().info())
 
         #-------Blood lab results preparation-------#
@@ -230,14 +236,16 @@ else:
         del df_bloodResults
         bloodResults = labResult.prepareLabs()
 
-
+        
         #merge vitals and blood
-        df_vitals_blood = inputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, gl_columns, clean_df,df_gases,gases_columns)
+        #08/10 i have to create the merging
+        df_vitals_blood = InputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, glucCreat_columns, clean_df,df_gases,gases_columns)
         print('final dataset df_vitals_blooexitd:')
         print(df_vitals_blood.info())     
         print(df_vitals_blood.head()) 
         #delete blood result object in order to free memory
         del bloodResults
+        exit()
         #Create another object with df_vitals_blood and fill blood features
         labImputer = lb.labsImpute(df_vitals_blood,glucCreat_df,lab_columns,gl_columns,time_interval)
         df_final_dataset = labImputer.populateLabResults(gases_columns)

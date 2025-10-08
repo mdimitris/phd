@@ -119,82 +119,101 @@ def evaluate_imputation(self, df, col, sample_idx):
         return {"MAE": mae, "RMSE": rmse, "n_eval": len(y_true_clean)}  
 
 
-# new Addition, merge all dataframes into a single one
+
 def mergeDataframes(df_blood, lab_columns, df_glucoCreat, gluc_columns, df_vitals,df_gases,gases_columns):
-    # first order dataframes by stay_id and time
-    print('merging dataframes:')
+     
+    #read filled vitals
+    dd_vitals = dd.read_parquet("filled/vitals_filled.parquet")
 
-    df_vitals.rename(columns={"vital_time": "charttime"}, inplace=True)   
-    # make sure indexes are reset and they have date as data type
-    df_vitals = df_vitals.reset_index()
-    df_blood = df_blood.reset_index()
-
-    df_glucoCreat[["subject_id", "stay_id"]] = df_glucoCreat[
-            ["subject_id", "stay_id"]
-        ].astype(pd.Int32Dtype())
-
-    df_blood.sort_values(by=["charttime", "stay_id"], inplace=True)
-    df_glucoCreat.sort_values(by=["charttime", "stay_id"], inplace=True)
-    df_vitals.sort_values(by=["charttime", "stay_id"], inplace=True)
-    df_gases.sort_values(by=["charttime", "stay_id"], inplace=True)
-
-    df_vitalsBlood = pd.merge_asof(
-            df_vitals,
-            df_blood,
-            on="charttime",  # Merging on charttime
-            by=["stay_id"],  # Ensure same subject and stay
-            suffixes=("_vitals", "_blood"),
-            tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
-        )
-
-    print('after df_blood merging')
-    print(df_vitalsBlood.info())     
-    print(df_vitalsBlood.head()) 
-
-    df_vitalsBloodGases = pd.merge_asof(
-            df_vitalsBlood,
-            df_gases,
-            on="charttime",  # Merging on charttime
-            by=["stay_id"],  # Ensure same subject and stay
-            suffixes=("_vb", "_gases"),
-            tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
-        )
-
-    print('merge glucose and creatinine new')
-    all = pd.merge_asof(
-            df_vitalsBloodGases,
-            df_glucoCreat,
-            on="charttime",  # Merging on charttime
-            by=["stay_id"],  # Ensure same subject and stay
-            suffixes=("_vbg", "_gluc"),
-            tolerance=pd.Timedelta("24h"),  
-        )
-
-    print("after glucose merging")
-
-
-    # all.set_index("charttime",inplace=True)
-    all.rename(columns={"subject_id_vitals": "subject_id","hadm_id_vitals":"hadm_id"}, inplace=True)
+    #read gases
+    dd_gases = dd.read_parquet("filled/gases_filled.parquet")
     
-    all.drop(
-        [
-            "hadm_id_blood",
-            "subject_id_blood",
-            "level_0",
-            "index_vitals",
-            "subject_id_vbg",
-            "subject_id_gluc",
-            "relative_time_min_gases",
-            "time_gap_min_gases",
-            "index_blood",
-            "hadm_id",
-            "group_gases"
-        ],
-        axis=1,
-        inplace=True,
-    )
+    #read creatinine and glucose
+    dd_glucCreat = dd.read_parquet("filled/glucCreat_filled.parquet")
 
-    return all
+    #read blood lab results
+    dd_blood = dd.read_parquet("filled/blood.parquet")
+
+    
+
+     #merge all
+
+# new Addition, merge all dataframes into a single one
+# def mergeDataframes(df_blood, lab_columns, df_glucoCreat, gluc_columns, df_vitals,df_gases,gases_columns):
+#     # first order dataframes by stay_id and time
+#     print('merging dataframes:')
+
+#     df_vitals.rename(columns={"vital_time": "charttime"}, inplace=True)   
+#     # make sure indexes are reset and they have date as data type
+#     df_vitals = df_vitals.reset_index()
+#     df_blood = df_blood.reset_index()
+
+#     df_glucoCreat[["subject_id", "stay_id"]] = df_glucoCreat[
+#             ["subject_id", "stay_id"]
+#         ].astype(pd.Int32Dtype())
+
+#     df_blood.sort_values(by=["charttime", "stay_id"], inplace=True)
+#     df_glucoCreat.sort_values(by=["charttime", "stay_id"], inplace=True)
+#     df_vitals.sort_values(by=["charttime", "stay_id"], inplace=True)
+#     df_gases.sort_values(by=["charttime", "stay_id"], inplace=True)
+
+#     df_vitalsBlood = pd.merge_asof(
+#             df_vitals,
+#             df_blood,
+#             on="charttime",  # Merging on charttime
+#             by=["stay_id"],  # Ensure same subject and stay
+#             suffixes=("_vitals", "_blood"),
+#             tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
+#         )
+
+#     print('after df_blood merging')
+#     print(df_vitalsBlood.info())     
+#     print(df_vitalsBlood.head()) 
+
+#     df_vitalsBloodGases = pd.merge_asof(
+#             df_vitalsBlood,
+#             df_gases,
+#             on="charttime",  # Merging on charttime
+#             by=["stay_id"],  # Ensure same subject and stay
+#             suffixes=("_vb", "_gases"),
+#             tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
+#         )
+
+#     print('merge glucose and creatinine new')
+#     all = pd.merge_asof(
+#             df_vitalsBloodGases,
+#             df_glucoCreat,
+#             on="charttime",  # Merging on charttime
+#             by=["stay_id"],  # Ensure same subject and stay
+#             suffixes=("_vbg", "_gluc"),
+#             tolerance=pd.Timedelta("24h"),  
+#         )
+
+#     print("after glucose merging")
+
+
+#     # all.set_index("charttime",inplace=True)
+#     all.rename(columns={"subject_id_vitals": "subject_id","hadm_id_vitals":"hadm_id"}, inplace=True)
+    
+#     all.drop(
+#         [
+#             "hadm_id_blood",
+#             "subject_id_blood",
+#             "level_0",
+#             "index_vitals",
+#             "subject_id_vbg",
+#             "subject_id_gluc",
+#             "relative_time_min_gases",
+#             "time_gap_min_gases",
+#             "index_blood",
+#             "hadm_id",
+#             "group_gases"
+#         ],
+#         axis=1,
+#         inplace=True,
+#     )
+
+#     return all
 
 
 def populateLabsResults(df,lab_columns,gluc_columns):

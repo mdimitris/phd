@@ -1,7 +1,7 @@
 import pandas as pd
 import InputData
 import vitalsImputeNew as vi
-import labsImpute as lb
+import bloodImpute as lb
 import glucoseImpute as gl 
 import gasesImpute as ga 
 import numpy as np
@@ -19,11 +19,11 @@ import xgBoostFill as xg
 #     print(client)  # Optional: view cluster info
 
 #------------24 hours-------------#
-directory="filled/vitals_filled.parquet"
+vitals_dir="filled/vitals_filled.parquet"
 
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 
-if os.listdir(directory) == []:
+if os.listdir(vitals_dir) == []:
 
         rows=100000
 
@@ -83,7 +83,7 @@ if os.listdir(directory) == []:
         
         
 
-else:
+
         # df_filled = dd.read_parquet("filled/vitals_filled.parquet")
 
         # imputer = vi.vitalsImputeNew(df_filled,checking_columns,15) 
@@ -181,74 +181,92 @@ else:
         # # print("XGBoost results:\n", xgb_results)
          
         # Blood gases data
-        #df_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
- #the part of gases is ok. I comment it for later       
-        # df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
-        # gases_columns = ['paco2', 'fio2', 'pao2']
-        # gases_imputer = ga.gasesImpute(df_bloodGases,gases_columns,24)
-        # df_gases=gases_imputer.prepareGases()
+gases_columns = ['paco2', 'fio2', 'pao2']
+gases_dir = 'filled/gases_filled.parquet'
 
-        # df_gases.to_parquet("filled/gases_filled.parquet", write_index=False)
+if os.listdir(gases_dir) == []:
 
-        # evaluator = ev.Evaluation(imputer=gases_imputer, data=df_bloodGases,
-        #                 columns_to_fill=gases_columns,
-        #                 mask_rate=0.2, n_runs=3)
+                df_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+                #df_bloodGases = dd.read_csv('/root/scripts/new_data/24hours/gases_24_hours_final.csv', dtype={"charttime": "object"}, sep='|')
+                gases_columns = ['paco2', 'fio2', 'pao2']
+                gases_imputer = ga.gasesImpute(df_bloodGases,gases_columns,24)
+                df_gases=gases_imputer.prepareGases()
 
-        # results, summary = evaluator.evaluate_filling_performance(df_bloodGases, df_gases)
+                df_gases.to_parquet("filled/gases_filled.parquet", write_index=False)
 
+                evaluator = ev.Evaluation(imputer=gases_imputer, data=df_bloodGases,
+                                columns_to_fill=gases_columns,
+                                mask_rate=0.2, n_runs=3)
+
+                results, summary = evaluator.evaluate_filling_performance(df_bloodGases, df_gases)
+                del df_bloodGases
         
         # Glucose and creatinine data
-        print("read and impute glucose and creatine:")
-        df_glucoCreat = dd.read_csv('/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv',  sep='|')
 
+glucCreat_dir = 'filled/glucCreat_filled.parquet'
+glucCreat_columns = ["creatinine","glucose"]
 
-        glucCreat_columns = ["creatinine","glucose"]
-        glucCreat_imputer = gl.glucoseImpute(df_glucoCreat,glucCreat_columns,3600)
-        glucCreat_df = glucCreat_imputer.prepareGlucose()
-        print("Glucose and creatine save in parquet and start evaluation:")
-        print(glucCreat_df.info())
-        
-        glucCreat_df.to_parquet("filled/glucCreat_filled.parquet", index=False)
-        glucCreat_evaluator = ev.Evaluation(imputer=glucCreat_imputer, data=df_glucoCreat,
-                        columns_to_fill=glucCreat_columns,
-                        mask_rate=0.2, n_runs=3)
+if os.listdir(glucCreat_dir) == []:
 
-        results, summary = glucCreat_evaluator.evaluate_filling_performance(df_glucoCreat, glucCreat_df)
-        
+                print("read and impute glucose and creatine:")        
+                #df_glucoCreat = dd.read_csv('/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv',  sep='|')
+                df_glucoCreat = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
+
+                glucCreat_columns = ["creatinine","glucose"]
+                glucCreat_imputer = gl.glucoseImpute(df_glucoCreat,glucCreat_columns,3600)
+                glucCreat_df = glucCreat_imputer.prepareGlucose()
+                print("Glucose and creatine save in parquet and start evaluation:")
+                print(glucCreat_df.info())
+                glucCreat_df.to_parquet("filled/glucCreat_filled.parquet", index=False)
+
+                glucCreat_evaluator = ev.Evaluation(imputer=glucCreat_imputer, data=df_glucoCreat,
+                                columns_to_fill=glucCreat_columns,
+                                mask_rate=0.4, n_runs=3)
+
+                results, summary = glucCreat_evaluator.evaluate_filling_performance(df_glucoCreat, glucCreat_df)
+                del df_glucoCreat
+
         #Delete initial dataframes to gain memory
-        del df_glucoCreat
+        
         # del df_bloodGases
         # del df_vitals
 
         # print(clean_df.compute().info())
 
         #-------Blood lab results preparation-------#
-        df_bloodResults = dd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')
-        lab_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
-        time_interval = 3600
+print(print("read and prepare blood tests..")  )
+df_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
+#df_bloodResults = dd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')
 
-        print('initial labs info before normalization:')
-        print(df_bloodResults.info())
+blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+time_interval = 3600
+glucCreat_df=[]
+print('initial labs info before normalization:')
+print(df_bloodResults.info())
 
-        labResult = lb.labsImpute(df_bloodResults,glucCreat_df,lab_columns,gl_columns,time_interval)
 
-        #Delete initial blood dataframe to gain memory
-        del df_bloodResults
-        bloodResults = labResult.prepareLabs()
+labResult = lb.bloodImpute(df_bloodResults,glucCreat_df,blood_columns,glucCreat_columns,time_interval)
 
+#Delete initial blood dataframe to gain memory
+del df_bloodResults
+bloodResults = labResult.prepareblood()
+print(bloodResults.head(200))
+exit()
         
         #merge vitals and blood
         #08/10 i have to create the merging
-        df_vitals_blood = InputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, glucCreat_columns, clean_df,df_gases,gases_columns)
-        print('final dataset df_vitals_blooexitd:')
-        print(df_vitals_blood.info())     
-        print(df_vitals_blood.head()) 
-        #delete blood result object in order to free memory
-        del bloodResults
-        exit()
+        #df_vitals_blood = InputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, glucCreat_columns, clean_df,df_gases,gases_columns)
+        #Now we merge the previous created parquet files with dask
+df_merged_data = InputData.mergeDataframes()
+print('final dataset df_vitals_blooexitd:')
+print(df_merged_data.info())     
+print(df_merged_data.head(200)) 
+#delete blood result object in order to free memory
+del bloodResults
+exit()
         #Create another object with df_vitals_blood and fill blood features
-        labImputer = lb.labsImpute(df_vitals_blood,glucCreat_df,lab_columns,gl_columns,time_interval)
-        df_final_dataset = labImputer.populateLabResults(gases_columns)
+labImputer = lb.labsImpute(df_vitals_blood,glucCreat_df,lab_columns,gl_columns,time_interval)
+df_final_dataset = labImputer.populateLabResults(gases_columns)
 
 
 

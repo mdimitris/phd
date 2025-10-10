@@ -238,42 +238,67 @@ class Evaluation:
         and compute MAE, RMSE, R2 for the masked values.
         """
         rng = np.random.default_rng(random_state)
-        
-        # Make a copy so we don't alter original
-        df_copy = df.copy()
 
-        # Work per stay_id to avoid leakage across patients
-        results = []
+        # --- Ensure a unique index for safe masking
+        df_copy = df.copy().reset_index(drop=True)
 
+        masked_indices = []   # to track which rows were masked
+        true_values = []      # to store ground truth values
+
+        # --- Mask fraction per stay_id
         for stay_id, group in df_copy.groupby("stay_id"):
             observed_idx = group[group[col].notna()].index
             if len(observed_idx) == 0:
                 continue
 
-            # Mask a fraction of observed values
             mask_size = max(1, int(len(observed_idx) * mask_frac))
             mask_idx = rng.choice(observed_idx, size=mask_size, replace=False)
 
-            true_vals = group.loc[mask_idx, col].copy()
+            masked_indices.extend(mask_idx)
+            true_values.extend(df_copy.loc[mask_idx, col].values)
+
             df_copy.loc[mask_idx, col] = np.nan
 
-        # Run the full imputer (pipeline)
+        # --- Run imputer
         df_filled = self.imputer.transform(df_copy)
 
-        # Collect predictions for masked values
-        preds = df_filled.loc[mask_idx, col]
+        # --- Extract predicted values for masked rows
+        preds = df_filled.loc[masked_indices, col].values
 
-        # Align and drop any remaining NaNs
-        mask = true_vals.notna() & preds.notna()
-        true_vals = true_vals[mask]
-        preds = preds[mask]
+        # --- Align lengths safely (just in case)
+        true_vals = np.array(true_values)
+        preds = np.array(preds)
 
-        # Compute metrics
+        min_len = min(len(true_vals), len(preds))
+        true_vals = true_vals[:min_len]
+        preds = preds[:min_len]
+
+        # --- Compute metrics
         mae = mean_absolute_error(true_vals, preds)
         rmse = root_mean_squared_error(true_vals, preds)
         r2 = r2_score(true_vals, preds)
 
         return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}
+       
+       
+       
+        # # Run the full imputer (pipeline)
+        # df_filled = self.imputer.transform(df_copy)
+
+        # # Collect predictions for masked values
+        # preds = df_filled.loc[mask_idx, col]
+
+        # # Align and drop any remaining NaNs
+        # mask = true_vals.notna() & preds.notna()
+        # true_vals = true_vals[mask]
+        # preds = preds[mask]
+
+        # # Compute metrics
+        # mae = mean_absolute_error(true_vals, preds)
+        # rmse = root_mean_squared_error(true_vals, preds)
+        # r2 = r2_score(true_vals, preds)
+
+        # return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}
     
     
     def evaluate_filling_performance(self, original_df, filled_df, columns=None):

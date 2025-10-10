@@ -61,8 +61,8 @@ class xgBoostFill:
             current_features = [f for f in self.features if f != col]
             current_features = self.feature_map.get(col, [f for f in self.features if f != col])
             train_data = data.dropna(subset=[col])
-            if train_data.empty:
-                continue
+            # if train_data.empty:
+            #     continue
 
             X_train = self.clean_dtypes(train_data[current_features])
             y_train = pd.to_numeric(train_data[col], errors="coerce").astype("float32").round(2)

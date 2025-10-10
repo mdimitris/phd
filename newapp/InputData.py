@@ -1,6 +1,6 @@
 import pandas as pd
 import dask.dataframe as dd
-
+import duckdb
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 
@@ -120,21 +120,93 @@ def evaluate_imputation(self, df, col, sample_idx):
 
 
 
-def mergeDataframes(df_blood, lab_columns, df_glucoCreat, gluc_columns, df_vitals,df_gases,gases_columns):
+def mergeDataframes():
+
+    print('start merging the parquet files')
+
+    # Connect (in-memory or persistent)
+    con = duckdb.connect()
+
+    # Optional: control parallelism (number of threads)
+    con.execute("SET threads = 16;")  # Adjust to your CPU cores
+
+    # 1️⃣ Run the chained ASOF joins
+    con.execute("""
+    CREATE OR REPLACE TABLE all_merged AS
+    WITH vitals_blood AS (
+        SELECT *
+        FROM 'filled/vitals_filled.parquet' AS vitals
+        ASOF JOIN 'filled/blood.parquet' AS blood
+        ON vitals.stay_id = blood.stay_id
+        AND vitals.charttime >= blood.charttime
+        AND vitals.charttime - blood.charttime <= INTERVAL '24 hour'
+    ),
+
+    vitals_blood_gases AS (
+        SELECT *
+        FROM vitals_blood AS vb
+        ASOF JOIN 'filled/gases_filled.parquet' AS gases
+        ON vb.stay_id = gases.stay_id
+        AND vb.charttime >= gases.charttime
+        AND vb.charttime - gases.charttime <= INTERVAL '24 hour'
+    ),
+
+    final_merge AS (
+        SELECT *
+        FROM vitals_blood_gases AS vbg
+        ASOF JOIN 'filled/glucCreat_filled.parquet' AS gluc
+        ON vbg.stay_id = gluc.stay_id
+        AND vbg.charttime >= gluc.charttime
+        AND vbg.charttime - gluc.charttime <= INTERVAL '24 hour'
+    )
+    SELECT * FROM final_merge;
+    """)
+
+    print("✅ ASOF merges complete: table 'all_merged' created.")
+
+    # 2️⃣ Dynamically find unwanted columns
+    cols_to_drop = con.execute("""
+        SELECT string_agg(name, ', ')
+        FROM pragma_table_info('all_merged')
+        WHERE name LIKE 'subject_id_%'
+        OR name LIKE 'stay_id_%'
+        OR name LIKE 'hadm_id_%';
+    """).fetchone()[0]
+
+    print("Columns to exclude:", cols_to_drop)
+
+    # 3️⃣ Export clean bucketed Parquet files
+    query = f"""
+    COPY (
+        SELECT * EXCLUDE ({cols_to_drop}),
+            (abs(hash(stay_id)) % 128) AS bucket
+        FROM all_merged
+    )
+    TO 'filled/all_merged_parquet'
+    (FORMAT PARQUET, PARTITION_BY (bucket), OVERWRITE TRUE);
+    """
+
+    con.execute(query)
+
+    print("✅ Export complete: Parquet dataset written to 'filled/all_merged_parquet/'")
+    print("Each stay_id is fully contained within a single bucket and unwanted columns are removed.")
+    all_merged = dd.read_parquet("filled/all_merged_parquet")
+
+    return all_merged
      
-    #read filled vitals
-    dd_vitals = dd.read_parquet("filled/vitals_filled.parquet")
+    # #read filled vitals
+    # dd_vitals = dd.read_parquet("filled/vitals_filled.parquet")
 
-    #read gases
-    dd_gases = dd.read_parquet("filled/gases_filled.parquet")
+    # #read gases
+    # dd_gases = dd.read_parquet("filled/gases_filled.parquet")
     
-    #read creatinine and glucose
-    dd_glucCreat = dd.read_parquet("filled/glucCreat_filled.parquet")
+    # #read creatinine and glucose
+    # dd_glucCreat = dd.read_parquet("filled/glucCreat_filled.parquet")
 
-    #read blood lab results
-    dd_blood = dd.read_parquet("filled/blood.parquet")
+    # #read blood lab results
+    # dd_blood = dd.read_parquet("filled/blood.parquet")
 
-    
+
 
      #merge all
 
@@ -157,37 +229,37 @@ def mergeDataframes(df_blood, lab_columns, df_glucoCreat, gluc_columns, df_vital
 #     df_vitals.sort_values(by=["charttime", "stay_id"], inplace=True)
 #     df_gases.sort_values(by=["charttime", "stay_id"], inplace=True)
 
-#     df_vitalsBlood = pd.merge_asof(
-#             df_vitals,
-#             df_blood,
-#             on="charttime",  # Merging on charttime
-#             by=["stay_id"],  # Ensure same subject and stay
-#             suffixes=("_vitals", "_blood"),
-#             tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
-#         )
+    # df_vitalsBlood = pd.merge_asof(
+    #         df_vitals,
+    #         df_blood,
+    #         on="charttime",  # Merging on charttime
+    #         by=["stay_id"],  # Ensure same subject and stay
+    #         suffixes=("_vitals", "_blood"),
+    #         tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
+    #     )
 
-#     print('after df_blood merging')
-#     print(df_vitalsBlood.info())     
-#     print(df_vitalsBlood.head()) 
+    # print('after df_blood merging')
+    # print(df_vitalsBlood.info())     
+    # print(df_vitalsBlood.head()) 
 
-#     df_vitalsBloodGases = pd.merge_asof(
-#             df_vitalsBlood,
-#             df_gases,
-#             on="charttime",  # Merging on charttime
-#             by=["stay_id"],  # Ensure same subject and stay
-#             suffixes=("_vb", "_gases"),
-#             tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
-#         )
+    # df_vitalsBloodGases = pd.merge_asof(
+    #         df_vitalsBlood,
+    #         df_gases,
+    #         on="charttime",  # Merging on charttime
+    #         by=["stay_id"],  # Ensure same subject and stay
+    #         suffixes=("_vb", "_gases"),
+    #         tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
+    #     )
 
-#     print('merge glucose and creatinine new')
-#     all = pd.merge_asof(
-#             df_vitalsBloodGases,
-#             df_glucoCreat,
-#             on="charttime",  # Merging on charttime
-#             by=["stay_id"],  # Ensure same subject and stay
-#             suffixes=("_vbg", "_gluc"),
-#             tolerance=pd.Timedelta("24h"),  
-#         )
+    # print('merge glucose and creatinine new')
+    # all = pd.merge_asof(
+    #         df_vitalsBloodGases,
+    #         df_glucoCreat,
+    #         on="charttime",  # Merging on charttime
+    #         by=["stay_id"],  # Ensure same subject and stay
+    #         suffixes=("_vbg", "_gluc"),
+    #         tolerance=pd.Timedelta("24h"),  
+    #     )
 
 #     print("after glucose merging")
 

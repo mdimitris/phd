@@ -236,14 +236,15 @@ class Evaluation:
         """
         Mask a fraction of observed values in a column, run the imputer,
         and compute MAE, RMSE, R2 for the masked values.
+        Handles NaNs and misalignments safely.
         """
         rng = np.random.default_rng(random_state)
 
-        # --- Ensure a unique index for safe masking
+        # Copy + reset index for safe masking
         df_copy = df.copy().reset_index(drop=True)
 
-        masked_indices = []   # to track which rows were masked
-        true_values = []      # to store ground truth values
+        masked_indices = []
+        true_values = []
 
         # --- Mask fraction per stay_id
         for stay_id, group in df_copy.groupby("stay_id"):
@@ -262,21 +263,24 @@ class Evaluation:
         # --- Run imputer
         df_filled = self.imputer.transform(df_copy)
 
-        # --- Extract predicted values for masked rows
+        # --- Extract predictions for masked rows
         preds = df_filled.loc[masked_indices, col].values
-
-        # --- Align lengths safely (just in case)
         true_vals = np.array(true_values)
-        preds = np.array(preds)
 
-        min_len = min(len(true_vals), len(preds))
-        true_vals = true_vals[:min_len]
-        preds = preds[:min_len]
+        # --- Align + clean NaNs
+        preds = np.array(preds)
+        mask = ~np.isnan(true_vals) & ~np.isnan(preds)
+        true_vals_clean = true_vals[mask]
+        preds_clean = preds[mask]
+
+        if len(true_vals_clean) == 0:
+            print(f"⚠️ No valid pairs to evaluate for {col}")
+            return {"Feature": col, "MAE": np.nan, "RMSE": np.nan, "R2": np.nan}
 
         # --- Compute metrics
-        mae = mean_absolute_error(true_vals, preds)
-        rmse = root_mean_squared_error(true_vals, preds)
-        r2 = r2_score(true_vals, preds)
+        mae = mean_absolute_error(true_vals_clean, preds_clean)
+        rmse = root_mean_squared_error(true_vals_clean, preds_clean)
+        r2 = r2_score(true_vals_clean, preds_clean)
 
         return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}
        

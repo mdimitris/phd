@@ -12,6 +12,7 @@ from dask.distributed import Client
 import pyarrow.parquet as pa
 import os
 import xgBoostFill as xg
+from LSTMImputer import LSTMImputer
 
 # Start Dask client (4 cores)
 # if __name__ == "__main__":
@@ -259,63 +260,112 @@ if os.listdir(blood_dir) == []:
         #df_vitals_blood = InputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, glucCreat_columns, clean_df,df_gases,gases_columns)
         #Now we merge the previous created parquet files with dask
 df_merged_data = InputData.mergeDataframes()
+cleaned_ddf = InputData.clean_dtypes(df_merged_data)
 
 
+xgboost_dir = 'filled/vitals_xgb_filled.parquet'
+blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
+if os.listdir(blood_dir) == []:
 #Fill the mbp,sbp,dbp with xgboost
 
-features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
-#columns_for_xgboost=['sbp','dbp','mbp','pulse_pressure']        
-columns_for_xgboost=['temperature']    
-FEATURE_MAP = {
-                "sbp": ["dbp", "mbp", "pulse_pressure", "heart_rate", "spo2"],
-                "dbp": ["sbp", "mbp", "pulse_pressure", "heart_rate", "spo2"],
-                "mbp": ["sbp", "dbp", "pulse_pressure", "heart_rate"],
-                "pulse_pressure": ["sbp", "dbp", "mbp"],
-
-                "heart_rate": ["resp_rate", "spo2", "temperature", "sbp", "dbp"],
-                "resp_rate": ["spo2", "heart_rate", "temperature"],
-                "spo2": ["resp_rate", "heart_rate", "pao2","paco2","fio2",'hematocrit', 'hemoglobin',"creatinine","glucose"],
-                "temperature": ["admission_age","los_icu","heart_rate", "resp_rate", "spo2", "sbp", "dbp", "mbp","wbc", "hematocrit", "glucose", "paco2","fio2", "pao2","wbc"],
-
-                "gcs": ["spo2", "temperature", "heart_rate"],
-                }
         
-xgbImputer = xg.xgBoostFill(
-   target_columns=columns_for_xgboost,
-   features=features_columns,
-   feature_map=FEATURE_MAP,
-   random_state=42
+        #columns_for_xgboost=['sbp','dbp','mbp','pulse_pressure']        
+        columns_for_xgboost=['sbp','dbp','mbp','pulse_pressure']    
+        FEATURE_MAP = {
+                        "sbp": ["dbp", "mbp", "pulse_pressure", "heart_rate", "spo2"],
+                        "dbp": ["sbp", "mbp", "pulse_pressure", "heart_rate", "spo2"],
+                        "mbp": ["sbp", "dbp", "pulse_pressure", "heart_rate"],
+                        "pulse_pressure": ["sbp", "dbp", "mbp"],
+
+                        "heart_rate": ["resp_rate", "spo2", "temperature", "sbp", "dbp"],
+                        "resp_rate": ["spo2", "heart_rate", "temperature"],
+                        "spo2": ["resp_rate", "heart_rate", "pao2","paco2","fio2",'hematocrit', 'hemoglobin',"creatinine","glucose"],
+                        "temperature": ["admission_age","los_icu","heart_rate", "resp_rate", "spo2", "sbp", "dbp", "mbp","wbc", "hematocrit", "glucose", "paco2","fio2", "pao2","wbc"],
+
+                        "gcs": ["spo2", "temperature", "heart_rate"],
+                        }
+                
+        xgbImputer = xg.xgBoostFill(
+        target_columns=columns_for_xgboost,
+        features=features_columns,
+        feature_map=FEATURE_MAP,
+        random_state=42
+        )
+
+
+
+        df_sample = cleaned_ddf.sample(frac=0.7).compute()  # small representative sample
+        xgbImputer.fit(cleaned_ddf)
+        meta = InputData.clean_dtypes(df_merged_data._meta)
+        ddf_filled = df_merged_data.map_partitions(xgbImputer.transform, meta=meta)
+        ddf_filled = ddf_filled.persist()
+        ddf_filled.to_parquet("filled/vitals_xgb_filled.parquet", write_index=False)
+        # # 3. Evaluate XGBoost
+        # 7. Evaluate on a pandas sample using your evaluation class
+        xgboost_evaluator = ev.Evaluation(
+        imputer=xgbImputer,
+        data = df_sample,
+        columns_to_fill=columns_for_xgboost, 
+        mask_rate=0.3, 
+        n_runs=3
+        )
+
+        results = []
+        for col in columns_for_xgboost:
+                res = xgboost_evaluator.evaluate(df_sample, col, mask_frac=0.3, n_runs=3)
+                results.append(res)
+
+        results_df = pd.DataFrame(results)
+        print(results_df)
+#I need to calculate the temperature taking in consideration other parameters from the dataset
+
+# Load data
+ddf = dd.read_parquet("filled/vitals_xgb_filled.parquet")
+
+# Define target + features
+target_col = ['temperature']
+feature_cols = [
+    "heart_rate", "resp_rate", "spo2", "pao2", "paco2",
+    "fio2", "hematocrit", "hemoglobin", "glucose", "admission_age"
+]
+
+# Initialize imputer
+lstm_imputer = LSTMImputer(
+    target_col=target_col,
+    feature_cols=feature_cols,
+    epochs=50,  # you can tune this
+    seq_len=12
 )
 
+# Fit + transform + save
+lstm_imputer.fit(ddf)
+ddf_filled = lstm_imputer.transform(ddf)
+lstm_imputer.save(ddf_filled, "filled/temperature_filled.parquet")
 
-cleaned_ddf = InputData.clean_dtypes(df_merged_data)
-df_sample = cleaned_ddf.sample(frac=0.7).compute()  # small representative sample
-xgbImputer.fit(cleaned_ddf)
-meta = InputData.clean_dtypes(df_merged_data._meta)
-ddf_filled = df_merged_data.map_partitions(xgbImputer.transform, meta=meta)
-ddf_filled = ddf_filled.persist()
-ddf_filled.to_parquet("filled/vitals_xgb_filled.parquet", write_index=False)
-# # 3. Evaluate XGBoost
-# 7. Evaluate on a pandas sample using your evaluation class
-xgboost_evaluator = ev.Evaluation(
-imputer=xgbImputer,
+#Evaluate lstm
+cleaned_ddf = InputData.clean_dtypes(ddf_filled)
+df_sample = cleaned_ddf.sample(frac=0.7).compute() 
+lstm_evaluator = ev.Evaluation(
+imputer=lstm_imputer,
 data = df_sample,
-columns_to_fill=columns_for_xgboost, 
+columns_to_fill=target_col, 
 mask_rate=0.3, 
 n_runs=3
 )
 
 results = []
-for col in columns_for_xgboost:
-        res = xgboost_evaluator.evaluate(df_sample, col, mask_frac=0.3, n_runs=3)
+for col in target_col:
+        res = lstm_evaluator.evaluate(df_sample, col, mask_frac=0.3, n_runs=3)
         results.append(res)
 
 results_df = pd.DataFrame(results)
 print(results_df)
-#I need to calculate the temperature taking in consideration other parameters from the dataset
+
+exit()
 
 #delete blood result object in order to free memory
-exit()
+
         #Create another object with df_vitals_blood and fill blood features
 labImputer = lb.labsImpute(df_vitals_blood,glucCreat_df,lab_columns,gl_columns,time_interval)
 df_final_dataset = labImputer.populateLabResults(gases_columns)

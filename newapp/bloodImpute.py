@@ -41,7 +41,7 @@ class bloodImpute:
         self.blood['charttime'] = dd.to_datetime(self.blood['charttime'])
         self.blood[self.blood_columns] = self.blood[self.blood_columns].astype("float32").round(2)
         self.blood[["subject_id","stay_id","hadm_id"]] = self.blood[["subject_id","stay_id","hadm_id"]].astype(pd.Int32Dtype())
-        self.blood=self.blood.drop('rdwsd', axis=1)
+        #self.blood=self.blood.drop('rdwsd', axis=1)
         #self.blood.drop(columns=['rdwsd'], inplace=True, errors='ignore')
         print('blood info after normalization:')
         print(self.blood.info())
@@ -59,12 +59,44 @@ class bloodImpute:
         df_examsBg = self.clearEmpties(
             self.get_examsBg(), exam_columns, "charttime",3
         )    
+
+
+    def transform(self, df, gas_columns=None):
+        """
+        Runs MICE imputation on lab results (wrapper for Evaluation class).
+        If gas_columns is None, it assumes you're imputing the same columns as populateLabResults.
+        """
+        if gas_columns is None:
+            gas_columns = []
+
+        print("🧬 Running MICE lab results imputation...")
+        columns_tofill = self.blood_columns + self.glucCreat_columns + gas_columns
+        # print(columns_tofill)
+        df_for_mice = df[self.blood_columns].copy()
+        kds = mf.ImputationKernel(
+            df_for_mice,
+            save_all_iterations=False,
+            random_state=100
+        )
+        kds.mice(iterations=3)
+        df_imputed = kds.complete_data(dataset=0)
+
+        # Reattach non-imputed columns
+        df_imputed.reset_index(drop=True, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        #columns_excluded = [col for col in df.columns if col not in columns_tofill]
+        columns_excluded = [col for col in df.columns if col not in self.blood_columns]
+        blood_imputed = pd.concat([df[columns_excluded], df_imputed], axis=1)
+
+        return blood_imputed
+    
+
     
     def populateLabResults(self,gas_columns):
         print("Lab results imputation started")
         
         
-        columns_tofill=self.lab_columns+self.glucCreat_columns+gas_columns
+        columns_tofill=self.blood_columns+self.glucCreat_columns+gas_columns
         df_for_mice = self.blood[columns_tofill].copy()
         kds = mf.ImputationKernel(
             df_for_mice,
@@ -83,6 +115,8 @@ class bloodImpute:
 
         # Optionally drop glucose/creatinine
         #blood_imputed.drop(columns=['glucose', 'creatinine'], inplace=True, errors='ignore')
+        #save to parquet file
+        blood_imputed.to_parquet("filled/blood_filled.parquet", index=False)
         return blood_imputed
 
         

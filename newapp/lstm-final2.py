@@ -247,13 +247,79 @@ if os.listdir(blood_dir) == []:
         glucCreat_df=[]
         print('initial labs info before normalization:')
         print(df_bloodResults.info())
-        labResult = lb.bloodImpute(df_bloodResults,glucCreat_df,blood_columns,glucCreat_columns,time_interval)
+        # Initialize imputer
+        labResult = lb.bloodImpute(
+                blood=df_bloodResults,
+                glucoseCreatinine=glucCreat_df,
+                blood_columns=blood_columns,
+                glucCreat_columns=glucCreat_columns,
+                interval=time_interval
+        )
+        
+        xgbImputer = xg.xgBoostFill(
+        target_columns=blood_columns,
+        features=blood_columns,
+        feature_map={},
+        random_state=42
+        )
 
         #Delete initial blood dataframe to gain memory
         del df_bloodResults
+        #labResult = lb.bloodImpute(df_bloodResults,glucCreat_df,blood_columns,glucCreat_columns,time_interval)
+        blood_df = labResult.prepareblood().compute()  # Convert from Dask to Pandas for imputation
+        print(blood_df.head(100))
+
         bloodResults = labResult.prepareblood()
         print(bloodResults.head(200))
 
+        df_sample = bloodResults.sample(frac=0.4).compute() 
+
+        columns_tofill = blood_columns+glucCreat_columns+gases_columns
+        
+        # Initialize evaluator
+        # Initialize imputer (for evaluation)
+        # blood_imputer = lb.bloodImpute(
+        # blood=blood_df,
+        # glucoseCreatinine=None,
+        # blood_columns=blood_columns,
+        # glucCreat_columns=glucCreat_columns,
+        # interval=2
+        # )
+        xgbImputer = xg.xgBoostFill(
+        target_columns=blood_columns,
+        features=blood_columns,
+        feature_map={},
+        random_state=42
+        )
+
+        # Initialize evaluator
+        # blood_evaluator = ev.Evaluation(
+        # imputer=blood_imputer,
+        # data=blood_df,
+        # columns_to_fill=blood_columns,
+        # mask_rate=0.3,
+        # n_runs=3
+        # )
+
+        xgboost_evaluator = ev.Evaluation(
+        imputer=xgbImputer,
+        data = df_sample,
+        columns_to_fill=blood_columns, 
+        mask_rate=0.3, 
+        n_runs=3
+        )
+
+        # Run evaluation
+        results = []
+        for col in blood_columns:
+                res = xgboost_evaluator.evaluate_masking(blood_df, col, mask_frac=0.3)
+                results.append(res)
+
+        results_bdf = pd.DataFrame(results)
+        ('print results:')
+        print(results_bdf)
+
+exit()
         
         #merge vitals and blood
         #08/10 i have to create the merging
@@ -264,7 +330,6 @@ cleaned_ddf = InputData.clean_dtypes(df_merged_data)
 
 
 xgboost_dir = 'filled/vitals_xgb_filled.parquet'
-blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
 features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 if os.listdir(blood_dir) == []:
 #Fill the mbp,sbp,dbp with xgboost
@@ -327,7 +392,7 @@ ddf = dd.read_parquet("filled/vitals_xgb_filled.parquet")
 target_col = ['temperature']
 feature_cols = [
     "heart_rate", "resp_rate", "spo2", "pao2", "paco2",
-    "fio2", "hematocrit", "hemoglobin", "glucose", "admission_age"
+    "fio2", "hematocrit", "hemoglobin", "glucose", "admission_age","wbc","los_icu"
 ]
 
 # Initialize imputer

@@ -255,13 +255,6 @@ if os.listdir(blood_dir) == []:
                 glucCreat_columns=glucCreat_columns,
                 interval=time_interval
         )
-        
-        xgbImputer = xg.xgBoostFill(
-        target_columns=blood_columns,
-        features=blood_columns,
-        feature_map={},
-        random_state=42
-        )
 
         #Delete initial blood dataframe to gain memory
         del df_bloodResults
@@ -278,41 +271,27 @@ if os.listdir(blood_dir) == []:
         
         # Initialize evaluator
         # Initialize imputer (for evaluation)
-        # blood_imputer = lb.bloodImpute(
-        # blood=blood_df,
-        # glucoseCreatinine=None,
-        # blood_columns=blood_columns,
-        # glucCreat_columns=glucCreat_columns,
-        # interval=2
-        # )
-        xgbImputer = xg.xgBoostFill(
-        target_columns=blood_columns,
-        features=blood_columns,
-        feature_map={},
-        random_state=42
+        blood_imputer = lb.bloodImpute(
+        blood=blood_df,
+        glucoseCreatinine=None,
+        blood_columns=blood_columns,
+        glucCreat_columns=glucCreat_columns,
+        interval=2
         )
 
         # Initialize evaluator
-        # blood_evaluator = ev.Evaluation(
-        # imputer=blood_imputer,
-        # data=blood_df,
-        # columns_to_fill=blood_columns,
-        # mask_rate=0.3,
-        # n_runs=3
-        # )
-
-        xgboost_evaluator = ev.Evaluation(
-        imputer=xgbImputer,
-        data = df_sample,
-        columns_to_fill=blood_columns, 
-        mask_rate=0.3, 
+        blood_evaluator = ev.Evaluation(
+        imputer=blood_imputer,
+        data=blood_df,
+        columns_to_fill=blood_columns,
+        mask_rate=0.3,
         n_runs=3
         )
 
         # Run evaluation
         results = []
         for col in blood_columns:
-                res = xgboost_evaluator.evaluate_masking(blood_df, col, mask_frac=0.3)
+                res = blood_evaluator.evaluate_masking(blood_df, col, mask_frac=0.3)
                 results.append(res)
 
         results_bdf = pd.DataFrame(results)

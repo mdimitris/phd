@@ -62,13 +62,13 @@ if os.listdir(vitals_dir) == []:
 merged_dir='nonfilled/all_merged.parquet'       
 if os.listdir(merged_dir) == []:    
         #Now merge the rest of the csv and create a large parquet block
-        ddf_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        ddf_bloodGases = dd.read_csv("/root/scripts/new_data/24hours/gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
         ddf_bloodGases.to_parquet('nonfilled/gases.parquet')
 
-        ddf_glucoCreat = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
+        ddf_glucoCreat = dd.read_csv("/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
         ddf_glucoCreat.to_parquet('nonfilled/glucCreat.parquet')
 
-        ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
+        ddf_bloodResults = dd.read_csv("/root/scripts/new_data/24hours/blood_24_hours.csv", sep='|')
         ddf_bloodResults.to_parquet('nonfilled/blood.parquet')
 
         ddf_vitals = dd.read_parquet("filled/vitals_filled.parquet")
@@ -78,17 +78,14 @@ print('read merged parquet')
 merged_ddf = dd.read_parquet("nonfilled/all_merged.parquet")
 
 #Diagnostics
-df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
-print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
-print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
-print('Rows after merging:',merged_ddf.shape[0].compute())
-rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
+# df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+# print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
+# print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
+# print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
+# print('Rows after merging:',merged_ddf.shape[0].compute())
+# rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
 
-print(f"Number of rows with empty cells: {rows_with_missing}")
-
-
-
+# print(f"Number of rows with empty cells: {rows_with_missing}")
 
 #Fill blood gases
 gases_columns = ['paco2', 'fio2', 'pao2']
@@ -97,11 +94,30 @@ merged_gasesFilled_ddf=gases_imputer.imputeGases()
 
 merged_gasesFilled_ddf.to_parquet("filled/merged_gases.parquet", write_index=False)
 
-evaluator = ev.Evaluation(imputer=gases_imputer, data=merged_gasesFilled_ddf,
-                columns_to_fill=gases_columns,
-                mask_rate=0.2, n_runs=3)
 
-results, summary = evaluator.evaluate_filling_performance(merged_ddf, merged_gasesFilled_ddf)
+df_sample = merged_gasesFilled_ddf.sample(frac=0.3).compute()  # small representative sample
+
+meta = InputData.clean_dtypes(df_merged_data._meta)
+
+# # 3. Evaluate XGBoost
+# 7. Evaluate on a pandas sample using your evaluation class
+xgboost_evaluator = ev.Evaluation(
+imputer=gases_imputer,
+data = df_sample,
+columns_to_fill=gases_columns, 
+mask_rate=0.3, 
+n_runs=3
+)
+
+results = []
+for col in gases_columns:
+        res = xgboost_evaluator.evaluate(df_sample, col, mask_frac=0.3, n_runs=3)
+        results.append(res)
+
+results_df = pd.DataFrame(results)
+print(results_df)
+
+
 
 exit()
 

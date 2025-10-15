@@ -34,17 +34,17 @@ class gasesImpute:
     def get_columns(self):
         return self.columns
     
-    def prepareGases(self):
-        import gc
-        gc.collect()
-        print('checking gases Columns')
-        print(self.columns)
-        # optimize df_vitals
-        self.gases[["subject_id", "stay_id","hadm_id"]] = self.gases[["subject_id", "stay_id","hadm_id"]].astype(pd.Int32Dtype())
-        self.gases["charttime"]=dd.to_datetime(self.gases['charttime'], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
-        self.gases[self.columns]=self.gases[self.columns].astype('float').astype('float32').round(2)
-        self.gases.drop(columns=['hadm_id', 'sofa_time','pf_ratio'],  errors='ignore')
-        return self.imputeGases()
+    # def prepareGases(self):
+    #     import gc
+    #     gc.collect()
+    #     print('checking gases Columns')
+    #     print(self.columns)
+    #     # optimize df_vitals
+    #     self.gases[["subject_id", "stay_id","hadm_id"]] = self.gases[["subject_id", "stay_id","hadm_id"]].astype(pd.Int32Dtype())
+    #     self.gases["charttime"]=dd.to_datetime(self.gases['charttime'], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
+    #     self.gases[self.columns]=self.gases[self.columns].astype('float').astype('float32').round(2)
+    #     self.gases.drop(columns=['hadm_id', 'sofa_time','pf_ratio'],  errors='ignore')
+    #     return self.imputeGases()
     
         
     def imputeGases(self):

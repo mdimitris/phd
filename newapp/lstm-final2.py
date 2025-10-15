@@ -23,41 +23,24 @@ from LSTMImputer import LSTMImputer
 vitals_dir="filled/vitals_filled.parquet"
 
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
+dtypes = {
+        "label_sepsis_within_6h": "Int8",
+        "label_sepsis_within_8h": "Int8",
+        "label_sepsis_within_12h": "Int8",
+        "gender": "Int8",
+        "sepsis_label": "Int8",
+        "label_sepsis_within_24h": "Int8",
+        "hospstay_seq" : "Int8", 
+        "hour_index_rev" : "Int8",
+        "hospital_expire_flag":"Int8",
+        "icustay_seq": "Int8",
+        "sepsis_label" : "Int8",
+        "gcs_time": "object"
+}
 
 if os.listdir(vitals_dir) == []:
 
         rows=100000
-
-        dtypes = {
-            "label_sepsis_within_6h": "Int8",
-            "label_sepsis_within_8h": "Int8",
-            "label_sepsis_within_12h": "Int8",
-            "gender": "Int8",
-            "sepsis_label": "Int8",
-            "label_sepsis_within_24h": "Int8",
-            "hospstay_seq" : "Int8", 
-            "hour_index_rev" : "Int8",
-            "hospital_expire_flag":"Int8",
-            "icustay_seq": "Int8",
-            "sepsis_label" : "Int8",
-            "gcs_time": "object"
-        }
-
-        #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype={"gcs_time": "object"})
-
-        # df_sample = pd.read_csv(
-        #     r"C:\phd-final\phd\newapp\vitals_24_hours_final.csv", 
-        #     #'/root/scripts/new_data/24hours/vitals_24_hours_final.csv',
-        #     sep='|',
-        #     dtype=dtypes,
-        #     nrows=8000)
-        # print(df_sample.dtypes)
-        # df_sample.to_csv("df_sample.csv", sep="|", index=False)
-        # bad_mask = df_sample.apply(lambda col: col.astype(str).str.contains("2145-08-06", na=False))
-        # bad_locs = bad_mask.any(axis=1)
-        # print(df_sample.loc[bad_locs].head(5))
-        # df_vitals = dd.from_pandas(df_sample, npartitions=1)
-        #df_vitals = dd.read_csv('/root/scripts/new_data/24hours/vitals_24_hours_final.csv', sep='|', dtype=dtypes)
 
         df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 
@@ -68,22 +51,59 @@ if os.listdir(vitals_dir) == []:
         clean_df = imputer.prepareVitals()
 
         # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
-        #df_filled = dd.read_csv("filled/vitals_filled-*.csv")
         df_filled = dd.read_parquet("filled/vitals_filled.parquet")
 
-        #df_filled = pa.read_table('filled/vitals_filled.parquet')
-
         # Step 3: Run evaluation
-        # simulate_and_evaluate_dask_filling
-
         vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
-
         evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
-
         print(evaluation_results)
-        
-        
 
+
+merged_dir='nonfilled/all_merged.parquet'       
+if os.listdir(merged_dir) == []:    
+        #Now merge the rest of the csv and create a large parquet block
+        ddf_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        ddf_bloodGases.to_parquet('nonfilled/gases.parquet')
+
+        ddf_glucoCreat = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
+        ddf_glucoCreat.to_parquet('nonfilled/glucCreat.parquet')
+
+        ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
+        ddf_bloodResults.to_parquet('nonfilled/blood.parquet')
+
+        ddf_vitals = dd.read_parquet("filled/vitals_filled.parquet")
+        df_merged_data = InputData.mergeDataframes()
+        
+print('read merged parquet')
+merged_ddf = dd.read_parquet("nonfilled/all_merged.parquet")
+
+#Diagnostics
+df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
+print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
+print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
+print('Rows after merging:',merged_ddf.shape[0].compute())
+rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
+
+print(f"Number of rows with empty cells: {rows_with_missing}")
+
+
+
+
+#Fill blood gases
+gases_columns = ['paco2', 'fio2', 'pao2']
+gases_imputer = ga.gasesImpute(merged_ddf,gases_columns,24)
+merged_gasesFilled_ddf=gases_imputer.imputeGases()
+
+merged_gasesFilled_ddf.to_parquet("filled/merged_gases.parquet", write_index=False)
+
+evaluator = ev.Evaluation(imputer=gases_imputer, data=merged_gasesFilled_ddf,
+                columns_to_fill=gases_columns,
+                mask_rate=0.2, n_runs=3)
+
+results, summary = evaluator.evaluate_filling_performance(merged_ddf, merged_gasesFilled_ddf)
+
+exit()
 
         # df_filled = dd.read_parquet("filled/vitals_filled.parquet")
 
@@ -304,8 +324,7 @@ exit()
         #08/10 i have to create the merging
         #df_vitals_blood = InputData.mergeDataframes(bloodResults, lab_columns, glucCreat_df, glucCreat_columns, clean_df,df_gases,gases_columns)
         #Now we merge the previous created parquet files with dask
-df_merged_data = InputData.mergeDataframes()
-cleaned_ddf = InputData.clean_dtypes(df_merged_data)
+
 
 
 xgboost_dir = 'filled/vitals_xgb_filled.parquet'

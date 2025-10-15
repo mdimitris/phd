@@ -30,7 +30,7 @@ def clean_dtypes(df):
                 #df["gender"] = df["gender"].cat.codes.replace(-1, 0).astype("int8")
         return df
 
-
+#this is for vitals cleaning
 def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Replace "NULL" with NaN
     ddf = ddf.replace("NULL", None)  # Dask supports None as missing
@@ -128,36 +128,36 @@ def mergeDataframes():
     con = duckdb.connect()
 
     # Optional: control parallelism (number of threads)
-    con.execute("SET threads = 16;")  # Adjust to your CPU cores
+    con.execute("SET threads = 16;")
 
     # 1️⃣ Run the chained ASOF joins
     con.execute("""
     CREATE OR REPLACE TABLE all_merged AS
     WITH vitals_blood AS (
         SELECT *
-        FROM 'filled/vitals_filled.parquet' AS vitals
-        ASOF JOIN 'filled/blood.parquet' AS blood
+        FROM read_parquet('filled/vitals_filled.parquet') AS vitals
+        ASOF LEFT JOIN read_parquet('nonfilled/blood.parquet') AS blood
         ON vitals.stay_id = blood.stay_id
-        AND vitals.charttime >= blood.charttime
-        AND vitals.charttime - blood.charttime <= INTERVAL '24 hour'
+        AND CAST(vitals.charttime AS TIMESTAMP) >= CAST(blood.charttime AS TIMESTAMP)
+        AND CAST(vitals.charttime AS TIMESTAMP) - CAST(blood.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
     ),
 
     vitals_blood_gases AS (
         SELECT *
         FROM vitals_blood AS vb
-        ASOF JOIN 'filled/gases_filled.parquet' AS gases
+        ASOF LEFT JOIN read_parquet('nonfilled/gases.parquet') AS gases
         ON vb.stay_id = gases.stay_id
-        AND vb.charttime >= gases.charttime
-        AND vb.charttime - gases.charttime <= INTERVAL '24 hour'
+        AND CAST(vb.charttime AS TIMESTAMP) >= CAST(gases.charttime AS TIMESTAMP)
+        AND CAST(vb.charttime AS TIMESTAMP) - CAST(gases.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
     ),
 
     final_merge AS (
         SELECT *
         FROM vitals_blood_gases AS vbg
-        ASOF JOIN 'filled/glucCreat_filled.parquet' AS gluc
+        ASOF LEFT JOIN read_parquet('nonfilled/glucCreat.parquet') AS gluc
         ON vbg.stay_id = gluc.stay_id
-        AND vbg.charttime >= gluc.charttime
-        AND vbg.charttime - gluc.charttime <= INTERVAL '24 hour'
+        AND CAST(vbg.charttime AS TIMESTAMP) >= CAST(gluc.charttime AS TIMESTAMP)
+        AND CAST(vbg.charttime AS TIMESTAMP) - CAST(gluc.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
     )
     SELECT * FROM final_merge;
     """)
@@ -176,22 +176,31 @@ def mergeDataframes():
     print("Columns to exclude:", cols_to_drop)
 
     # 3️⃣ Export clean bucketed Parquet files
-    query = f"""
-    COPY (
+    df_merged_data = con.execute(f"""
         SELECT * EXCLUDE ({cols_to_drop}),
-            (abs(hash(stay_id)) % 128) AS bucket
+               (abs(hash(stay_id)) % 128) AS bucket
         FROM all_merged
-    )
-    TO 'filled/all_merged_parquet'
-    (FORMAT PARQUET, PARTITION_BY (bucket), OVERWRITE TRUE);
-    """
+    """).df()
 
-    con.execute(query)
+    print("✅ Data fetched into pandas DataFrame, ready for cleaning.")
 
-    print("✅ Export complete: Parquet dataset written to 'filled/all_merged_parquet/'")
+    # 4️⃣ Clean data types using your custom method
+    df_merged_data = clean_dtypes(df_merged_data)
+    print("✅ Data types cleaned using InputData.clean_dtypes().")
+
+    # 5️⃣ Write cleaned and bucketed Parquet dataset
+    con.register("cleaned_data", df_merged_data)
+    con.execute("""
+        COPY cleaned_data
+        TO 'nonfilled/all_merged.parquet'
+        (FORMAT PARQUET, PARTITION_BY (bucket), OVERWRITE TRUE);
+    """)
+
+    print("✅ Export complete: Parquet dataset written to 'nonfilled/all_merged.parquet/'")
     print("Each stay_id is fully contained within a single bucket and unwanted columns are removed.")
-    all_merged = dd.read_parquet("filled/all_merged_parquet")
 
+    # 6️⃣ Return as Dask DataFrame for further processing
+    all_merged = dd.read_parquet("nonfilled/all_merged.parquet")
     return all_merged
      
     # #read filled vitals

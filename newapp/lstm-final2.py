@@ -1,7 +1,7 @@
 import pandas as pd
 import InputData
 import vitalsImputeNew as vi
-import bloodImpute as lb
+import bloodImpute_OLD as lb
 import glucoseImpute as gl 
 import gasesImpute as ga 
 import numpy as np
@@ -13,12 +13,14 @@ import pyarrow.parquet as pa
 import os
 import xgBoostFill as xg
 from LSTMImputer import LSTMImputer
+import helpers as help
+import bloodImpute as bloodImp
 
-# Start Dask client (4 cores)
-# if __name__ == "__main__":
-#     client = Client(n_workers=4, threads_per_worker=1, memory_limit="3GB")
-#     print(client)  # Optional: view cluster info
 
+
+blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+gases_columns = ['paco2', 'fio2', 'pao2']
+glucCreat_columns = ["creatinine","glucose"]
 #------------24 hours-------------#
 vitals_dir="filled/vitals_filled.parquet"
 
@@ -59,37 +61,81 @@ if os.listdir(vitals_dir) == []:
         print(evaluation_results)
 
 
-merged_dir='nonfilled/all_merged.parquet'       
+merged_dir='unfilled/all_merged.parquet'       
 if os.listdir(merged_dir) == []:    
-        #Now merge the rest of the csv and create a large parquet block
-        ddf_bloodGases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
-        ddf_bloodGases.to_parquet('nonfilled/gases.parquet')
-
-        ddf_glucoCreat = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
-        ddf_glucoCreat.to_parquet('nonfilled/glucCreat.parquet')
 
         ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
-        ddf_bloodResults.to_parquet('nonfilled/blood.parquet')
+        help.prepareDataset(ddf_bloodResults,blood_columns,["rdwsd","admittime"],'blood')
+
+        ddf_gases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        help.prepareDataset(ddf_gases,gases_columns,["hadm_id","sofa_time"],'gases')    
+
+        ddf_glucoCreat = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
+        help.prepareDataset(ddf_glucoCreat,glucCreat_columns,["hadm_id"],'glucCreat')
 
         ddf_vitals = dd.read_parquet("filled/vitals_filled.parquet")
         df_merged_data = InputData.mergeDataframes()
         
 print('read merged parquet')
-merged_ddf = dd.read_parquet("nonfilled/all_merged.parquet")
+merged_ddf = dd.read_parquet("unfilled/all_merged.parquet")
 
 #Diagnostics
 df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
 print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
+print ("Rows before starting procedures:",df_vitals.shape[0].compute())
 print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
 print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
 print('Rows after merging:',merged_ddf.shape[0].compute())
+
 rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
-
 print(f"Number of rows with empty cells: {rows_with_missing}")
+print("Calculate missing values per column")
+help.calculateMissing(merged_ddf)
+
+
+
+#Fill Blood columns
+blood_imputer=bloodImp.bloodImpute(merged_ddf,blood_columns,200,"filled/all_merged/blood.parquet")
+blood_imputer.run()
+
+# -----------------------------
+# 4. Load a sample for evaluation
+# -----------------------------
+# Pick one or a few Parquet batches for evaluation
+merged_filled_blood = dd.read_parquet("filled/all_merged/blood.parquet")
+print("Calculate missing values after blood filling")
+help.calculateMissing(merged_ddf)
+cleaned_ddf = InputData.clean_dtypes(merged_filled_blood)
+df_sample = cleaned_ddf.sample(frac=0.3).compute() 
+# -----------------------------
+# 5. Create Evaluation instance
+# -----------------------------
+evaluator = ev.Evaluation(
+    imputer=blood_imputer,      # the filling object
+    data=df_sample,             # sample for evaluation
+    columns_to_fill=blood_columns,
+    mask_rate=0.2,              # fraction of observed values to mask
+    n_runs=3
+)
+
+# -----------------------------
+# 6. Run evaluation for each blood column
+# -----------------------------
+results = []
+for col in blood_columns:
+    print(f"Evaluating {col}...")
+    res = evaluator.evaluate_masking(df_sample, col, mask_frac=0.2)
+    results.append(res)
+
+df_results = pd.DataFrame(results)
+print("\n📊 Blood Imputation Evaluation Results:")
+print(df_results)
 
 
 
 
+
+exit()
 #Fill blood gases
 gases_columns = ['paco2', 'fio2', 'pao2']
 gases_imputer = ga.gasesImpute(merged_ddf,gases_columns,24)
@@ -102,7 +148,7 @@ evaluator = ev.Evaluation(imputer=gases_imputer, data=merged_gasesFilled_ddf,
                 mask_rate=0.2, n_runs=3)
 
 results, summary = evaluator.evaluate_filling_performance(merged_ddf, merged_gasesFilled_ddf)
-
+print(results,summary)
 exit()
 
         # df_filled = dd.read_parquet("filled/vitals_filled.parquet")

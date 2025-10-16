@@ -1,122 +1,152 @@
-import pandas as pd
 import dask.dataframe as dd
-from sklearn.experimental import enable_iterative_imputer  # noqa
-from sklearn.impute import IterativeImputer
+import pandas as pd
 import numpy as np
-from xgboost import XGBRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-import matplotlib.pyplot as plt
+import os
+import gc
 import miceforest as mf
 
 class bloodImpute:
-    
-    def __init__(self, blood, glucoseCreatinine, blood_columns, glucCreat_columns, interval):
+    def __init__(self, blood, blood_columns, batch_size, output_dir):
+        """
+        Parameters
+        ----------
+        blood : dask.DataFrame
+            The merged dataframe containing blood data.
+        blood_columns : list[str]
+            Columns to apply MICE imputation on.
+        batch_size : int
+            Number of stay_ids per batch.
+        output_dir : str
+            Directory where imputed batches will be saved.
+        """
         self.blood = blood
-        self.glucoseCreatinine = glucoseCreatinine
         self.blood_columns = blood_columns
-        self.glucCreat_columns = glucCreat_columns
-        self.interval = interval    
-                   
-    def set_blood(self, blood):
-        self.blood = blood
+        self.batch_size = batch_size
+        self.output_dir = output_dir
 
-    def get_blood(self):
-        return self.blood
-    
-    def set_glucoseCreatinine(self, glucoseCreatinine):
-        self.glucoseCreatinine = glucoseCreatinine
+        os.makedirs(self.output_dir, exist_ok=True)
 
-    def get_glucoseCreatinine(self):
-        return self.glucoseCreatinine
-    
-    
-    
-    
-    
-    def prepareblood(self):
-        
-        #first delete rows that all data are missing
-        #df_glucoseCreatinine = InputData.clearEmpties(self.glucoseCreatinine, self.lab_columns, "charttime", 2)
-        self.blood['admittime'] = dd.to_datetime(self.blood['admittime'])
-        self.blood['charttime'] = dd.to_datetime(self.blood['charttime'])
-        self.blood[self.blood_columns] = self.blood[self.blood_columns].astype("float32").round(2)
-        self.blood[["subject_id","stay_id","hadm_id"]] = self.blood[["subject_id","stay_id","hadm_id"]].astype(pd.Int32Dtype())
-        #self.blood=self.blood.drop('rdwsd', axis=1)
-        #self.blood.drop(columns=['rdwsd'], inplace=True, errors='ignore')
-        print('blood info after normalization:')
-        print(self.blood.info())
-        #save to parquet in order to use it later
-        self.blood.to_parquet("filled/blood.parquet", write_index=False)
-        return self.blood
-      
-        
-
-    def prepareExamsBg(self):
-        exam_columns=self.get_columns_to_fill_2()
-
-        exam_columns.remove("creatinine")
-        exam_columns.remove("glucose")
-        df_examsBg = self.clearEmpties(
-            self.get_examsBg(), exam_columns, "charttime",3
-        )    
-
-
-    def transform(self, df, gas_columns=None):
+    # --------------------------------------------------------------------------
+    def prefill_dask(self):
         """
-        Runs MICE imputation on lab results (wrapper for Evaluation class).
-        If gas_columns is None, it assumes you're imputing the same columns as populateLabResults.
+        Forward-fill, backward-fill, and interpolate numeric blood columns
+        grouped by stay_id.
         """
-        if gas_columns is None:
-            gas_columns = []
+        print("🩸 Starting ffill/bfill/interpolation in blood columns...")
 
-        print("🧬 Running MICE lab results imputation...")
-        columns_tofill = self.blood_columns + self.glucCreat_columns + gas_columns
-        # print(columns_tofill)
-        df_for_mice = df[self.blood_columns].copy()
-        kds = mf.ImputationKernel(
-            df_for_mice,
-            save_all_iterations=False,
-            random_state=100
-        )
-        kds.mice(iterations=3)
-        df_imputed = kds.complete_data(dataset=0)
+        # Ensure stay_id exists
+        if "stay_id" not in self.blood.columns:
+            raise ValueError("❌ 'stay_id' column not found in blood dataframe!")
 
-        # Reattach non-imputed columns
-        df_imputed.reset_index(drop=True, inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        #columns_excluded = [col for col in df.columns if col not in columns_tofill]
-        columns_excluded = [col for col in df.columns if col not in self.blood_columns]
-        blood_imputed = pd.concat([df[columns_excluded], df_imputed], axis=1)
+        # Explicit Dask meta (required for apply)
+        meta = {col: "f4" for col in self.blood_columns}
 
-        return blood_imputed
-    
+        # Apply ffill/bfill/interpolation grouped by stay_id
+        def fill_group(df):
+            return df.ffill().bfill().interpolate(method="linear")
 
-    
-    def populateLabResults(self,gas_columns):
-        print("Lab results imputation started")
-        
-        
-        columns_tofill=self.blood_columns+self.glucCreat_columns+gas_columns
-        df_for_mice = self.blood[columns_tofill].copy()
-        kds = mf.ImputationKernel(
-            df_for_mice,
-            save_all_iterations=False,
-            random_state=100
-        )
+        try:
+            filled = (
+                self.blood.groupby("stay_id")[self.blood_columns]
+                .apply(fill_group, meta=meta)
+            )
+            # Merge filled data back with original Dask DataFrame
+            self.blood = self.blood.assign(**{col: filled[col] for col in self.blood_columns})
+        except Exception as e:
+            raise RuntimeError(f"❌ Error during interpolation step: {e}")
 
-        kds.mice(iterations=3)
-        df_imputed = kds.complete_data(dataset=0)
+        print("✅ Prefill with ffill/bfill/interpolation done.")
 
-        # Reattach ID/time columns
-        df_imputed.reset_index(drop=True, inplace=True)
-        self.blood.reset_index(drop=True, inplace=True)
-        columns_excluded = [col for col in self.blood.columns if col not in columns_tofill]
-        blood_imputed = pd.concat([self.blood[columns_excluded], df_imputed], axis=1)
+    # --------------------------------------------------------------------------
+    def batch_mice_imputation(self):
+        """
+        Runs MICE imputation in batches by stay_id and saves each batch to Parquet.
+        """
+        print("🧩 Starting MICE imputation for blood columns...")
 
-        # Optionally drop glucose/creatinine
-        #blood_imputed.drop(columns=['glucose', 'creatinine'], inplace=True, errors='ignore')
-        #save to parquet file
-        blood_imputed.to_parquet("filled/blood_filled.parquet", index=False)
-        return blood_imputed
+        # Validate inputs
+        if self.blood is None:
+            raise ValueError("❌ self.blood is not initialized.")
+        if self.batch_size <= 0:
+            raise ValueError(f"❌ Invalid batch_size: {self.batch_size}")
 
-        
+        # Compute unique stay_ids safely
+        unique_stays = self.blood["stay_id"].drop_duplicates().compute().to_numpy()
+        unique_stays = unique_stays[~pd.isna(unique_stays)]
+        n_stays = len(unique_stays)
+        print(f"Total unique stay_id: {n_stays}")
+
+        if n_stays == 0:
+            raise ValueError("❌ No valid stay_id values found in self.blood — cannot batch impute.")
+
+        batch_num = 0
+        max_batches = 128  # limit total parquet files
+
+        for i in range(0, n_stays, self.batch_size):
+            if batch_num >= max_batches:
+                print(f"Reached limit of {max_batches} Parquet files. Stopping early.")
+                break
+
+            batch_stays = list(unique_stays[i:i + self.batch_size])
+            if not batch_stays:
+                print(f"⚠️ Empty batch {batch_num}, skipping.")
+                continue
+
+            print(f"🧠 Processing batch {batch_num + 1}/{max_batches} "
+                  f"({len(batch_stays)} patients)")
+
+            # --- Filter Dask DataFrame safely using .isin() ---
+            try:
+                batch_ddf = self.blood[self.blood["stay_id"].isin(batch_stays)].compute()
+            except Exception as e:
+                print(f"❌ Failed to filter batch {batch_num}: {e}")
+                continue
+
+            if batch_ddf.empty:
+                print(f"⚠️ Batch {batch_num} is empty, skipping.")
+                continue
+
+            # --- Run MICE Imputation ---
+            try:
+                kds = mf.ImputationKernel(
+                    batch_ddf[self.blood_columns],
+                    save_all_iterations=False,
+                    random_state=42
+                )
+                kds.mice(iterations=3)
+                df_imputed = kds.complete_data(dataset=0)
+            except Exception as e:
+                print(f"❌ Error running MICE on batch {batch_num}: {e}")
+                continue
+
+            # --- Reattach non-lab columns ---
+            columns_excluded = [c for c in batch_ddf.columns if c not in self.blood_columns]
+            batch_final = pd.concat(
+                [
+                    batch_ddf[columns_excluded].reset_index(drop=True),
+                    df_imputed.reset_index(drop=True),
+                ],
+                axis=1,
+            )
+
+            # --- Save batch ---
+            batch_file = os.path.join(self.output_dir, f"batch_{batch_num:03d}.parquet")
+            try:
+                batch_final.to_parquet(batch_file, index=False)
+                print(f"💾 Saved batch {batch_num + 1} → {batch_file}")
+            except Exception as e:
+                print(f"❌ Failed to save batch {batch_num}: {e}")
+
+            # Cleanup
+            batch_num += 1
+            del batch_ddf, df_imputed, batch_final
+            gc.collect()
+
+        print("✅ MICE imputation completed for all batches.")
+
+    # --------------------------------------------------------------------------
+    def run(self):
+        print("***** Starting Lab Imputation Pipeline ******")
+        self.prefill_dask()
+        self.batch_mice_imputation()
+        print("✅ Lab imputation finished. All batches saved to:", self.output_dir)

@@ -136,7 +136,7 @@ def mergeDataframes():
     WITH vitals_blood AS (
         SELECT *
         FROM read_parquet('filled/vitals_filled.parquet') AS vitals
-        ASOF LEFT JOIN read_parquet('nonfilled/blood.parquet') AS blood
+        ASOF LEFT JOIN read_parquet('unfilled/blood.parquet') AS blood
         ON vitals.stay_id = blood.stay_id
         AND CAST(vitals.charttime AS TIMESTAMP) >= CAST(blood.charttime AS TIMESTAMP)
         AND CAST(vitals.charttime AS TIMESTAMP) - CAST(blood.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -145,7 +145,7 @@ def mergeDataframes():
     vitals_blood_gases AS (
         SELECT *
         FROM vitals_blood AS vb
-        ASOF LEFT JOIN read_parquet('nonfilled/gases.parquet') AS gases
+        ASOF LEFT JOIN read_parquet('unfilled/gases.parquet') AS gases
         ON vb.stay_id = gases.stay_id
         AND CAST(vb.charttime AS TIMESTAMP) >= CAST(gases.charttime AS TIMESTAMP)
         AND CAST(vb.charttime AS TIMESTAMP) - CAST(gases.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -154,7 +154,7 @@ def mergeDataframes():
     final_merge AS (
         SELECT *
         FROM vitals_blood_gases AS vbg
-        ASOF LEFT JOIN read_parquet('nonfilled/glucCreat.parquet') AS gluc
+        ASOF LEFT JOIN read_parquet('unfilled/glucCreat.parquet') AS gluc
         ON vbg.stay_id = gluc.stay_id
         AND CAST(vbg.charttime AS TIMESTAMP) >= CAST(gluc.charttime AS TIMESTAMP)
         AND CAST(vbg.charttime AS TIMESTAMP) - CAST(gluc.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -192,109 +192,17 @@ def mergeDataframes():
     con.register("cleaned_data", df_merged_data)
     con.execute("""
         COPY cleaned_data
-        TO 'nonfilled/all_merged.parquet'
+        TO 'unfilled/all_merged.parquet'
         (FORMAT PARQUET, PARTITION_BY (bucket), OVERWRITE TRUE);
     """)
 
-    print("✅ Export complete: Parquet dataset written to 'nonfilled/all_merged.parquet/'")
+    print("✅ Export complete: Parquet dataset written to 'unfilled/all_merged.parquet/'")
     print("Each stay_id is fully contained within a single bucket and unwanted columns are removed.")
 
     # 6️⃣ Return as Dask DataFrame for further processing
-    all_merged = dd.read_parquet("nonfilled/all_merged.parquet")
+    all_merged = dd.read_parquet("unfilled/all_merged.parquet")
     return all_merged
-     
-    # #read filled vitals
-    # dd_vitals = dd.read_parquet("filled/vitals_filled.parquet")
 
-    # #read gases
-    # dd_gases = dd.read_parquet("filled/gases_filled.parquet")
-    
-    # #read creatinine and glucose
-    # dd_glucCreat = dd.read_parquet("filled/glucCreat_filled.parquet")
-
-    # #read blood lab results
-    # dd_blood = dd.read_parquet("filled/blood.parquet")
-
-
-
-     #merge all
-
-# new Addition, merge all dataframes into a single one
-# def mergeDataframes(df_blood, lab_columns, df_glucoCreat, gluc_columns, df_vitals,df_gases,gases_columns):
-#     # first order dataframes by stay_id and time
-#     print('merging dataframes:')
-
-#     df_vitals.rename(columns={"vital_time": "charttime"}, inplace=True)   
-#     # make sure indexes are reset and they have date as data type
-#     df_vitals = df_vitals.reset_index()
-#     df_blood = df_blood.reset_index()
-
-#     df_glucoCreat[["subject_id", "stay_id"]] = df_glucoCreat[
-#             ["subject_id", "stay_id"]
-#         ].astype(pd.Int32Dtype())
-
-#     df_blood.sort_values(by=["charttime", "stay_id"], inplace=True)
-#     df_glucoCreat.sort_values(by=["charttime", "stay_id"], inplace=True)
-#     df_vitals.sort_values(by=["charttime", "stay_id"], inplace=True)
-#     df_gases.sort_values(by=["charttime", "stay_id"], inplace=True)
-
-    # df_vitalsBlood = pd.merge_asof(
-    #         df_vitals,
-    #         df_blood,
-    #         on="charttime",  # Merging on charttime
-    #         by=["stay_id"],  # Ensure same subject and stay
-    #         suffixes=("_vitals", "_blood"),
-    #         tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
-    #     )
-
-    # print('after df_blood merging')
-    # print(df_vitalsBlood.info())     
-    # print(df_vitalsBlood.head()) 
-
-    # df_vitalsBloodGases = pd.merge_asof(
-    #         df_vitalsBlood,
-    #         df_gases,
-    #         on="charttime",  # Merging on charttime
-    #         by=["stay_id"],  # Ensure same subject and stay
-    #         suffixes=("_vb", "_gases"),
-    #         tolerance=pd.Timedelta("24h"),  # Adjust this to your tolerance level
-    #     )
-
-    # print('merge glucose and creatinine new')
-    # all = pd.merge_asof(
-    #         df_vitalsBloodGases,
-    #         df_glucoCreat,
-    #         on="charttime",  # Merging on charttime
-    #         by=["stay_id"],  # Ensure same subject and stay
-    #         suffixes=("_vbg", "_gluc"),
-    #         tolerance=pd.Timedelta("24h"),  
-    #     )
-
-#     print("after glucose merging")
-
-
-#     # all.set_index("charttime",inplace=True)
-#     all.rename(columns={"subject_id_vitals": "subject_id","hadm_id_vitals":"hadm_id"}, inplace=True)
-    
-#     all.drop(
-#         [
-#             "hadm_id_blood",
-#             "subject_id_blood",
-#             "level_0",
-#             "index_vitals",
-#             "subject_id_vbg",
-#             "subject_id_gluc",
-#             "relative_time_min_gases",
-#             "time_gap_min_gases",
-#             "index_blood",
-#             "hadm_id",
-#             "group_gases"
-#         ],
-#         axis=1,
-#         inplace=True,
-#     )
-
-#     return all
 
 
 def populateLabsResults(df,lab_columns,gluc_columns):

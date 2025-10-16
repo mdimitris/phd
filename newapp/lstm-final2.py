@@ -67,7 +67,7 @@ if os.listdir(merged_dir) == []:
         ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
         help.prepareDataset(ddf_bloodResults,blood_columns,["rdwsd","admittime"],'blood')
 
-        ddf_gases = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        ddf_gases = dd.read_csv("/root/scripts/new_data/24hours/gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
         help.prepareDataset(ddf_gases,gases_columns,["hadm_id","sofa_time"],'gases')    
 
         ddf_glucoCreat = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
@@ -136,6 +136,15 @@ print(df_results)
 
 
 exit()
+# df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+# print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
+# print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
+# print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
+# print('Rows after merging:',merged_ddf.shape[0].compute())
+# rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
+
+# print(f"Number of rows with empty cells: {rows_with_missing}")
+
 #Fill blood gases
 gases_columns = ['paco2', 'fio2', 'pao2']
 gases_imputer = ga.gasesImpute(merged_ddf,gases_columns,24)
@@ -143,9 +152,20 @@ merged_gasesFilled_ddf=gases_imputer.imputeGases()
 
 merged_gasesFilled_ddf.to_parquet("filled/merged_gases.parquet", write_index=False)
 
-evaluator = ev.Evaluation(imputer=gases_imputer, data=merged_gasesFilled_ddf,
-                columns_to_fill=gases_columns,
-                mask_rate=0.2, n_runs=3)
+
+df_sample = merged_gasesFilled_ddf.sample(frac=0.3).compute()  # small representative sample
+
+meta = InputData.clean_dtypes(df_merged_data._meta)
+
+# # 3. Evaluate XGBoost
+# 7. Evaluate on a pandas sample using your evaluation class
+xgboost_evaluator = ev.Evaluation(
+imputer=gases_imputer,
+data = df_sample,
+columns_to_fill=gases_columns, 
+mask_rate=0.3, 
+n_runs=3
+)
 
 results, summary = evaluator.evaluate_filling_performance(merged_ddf, merged_gasesFilled_ddf)
 print(results,summary)

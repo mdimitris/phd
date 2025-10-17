@@ -1,7 +1,6 @@
 import pandas as pd
 import InputData
 import vitalsImputeNew as vi
-import bloodImpute_OLD as lb
 import glucoseImpute as gl 
 import gasesImpute as ga 
 import numpy as np
@@ -22,7 +21,7 @@ blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'plate
 gases_columns = ['paco2', 'fio2', 'pao2']
 glucCreat_columns = ["creatinine","glucose"]
 #------------24 hours-------------#
-vitals_dir="filled/vitals_filled.parquet"
+vitals_dir="filled/vitals_filled.parquet/"
 
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 dtypes = {
@@ -60,8 +59,8 @@ if os.listdir(vitals_dir) == []:
         evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
         print(evaluation_results)
 
-
-merged_dir='unfilled/all_merged.parquet'       
+merged_dir='/root/scripts/newapp/unfilled/all_merged.parquet/'
+#merged_dir='unfilled/all_merged.parquet/'       
 if os.listdir(merged_dir) == []:    
 
         ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
@@ -77,13 +76,14 @@ if os.listdir(merged_dir) == []:
         df_merged_data = InputData.mergeDataframes()
         
 print('read merged parquet')
-merged_ddf = dd.read_parquet("unfilled/all_merged.parquet")
+merged_ddf = dd.read_parquet("/root/scripts/newapp/unfilled/all_merged.parquet")
+print('dtype is:',merged_ddf.dtypes["stay_id"])
 
 #Diagnostics
-df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
-print ("Rows before starting procedures:",df_vitals.shape[0].compute())
-print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
+# df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+# print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
+# print ("Rows before starting procedures:",df_vitals.shape[0].compute())
+# print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
 print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
 print('Rows after merging:',merged_ddf.shape[0].compute())
 
@@ -91,7 +91,6 @@ rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
 print(f"Number of rows with empty cells: {rows_with_missing}")
 print("Calculate missing values per column")
 help.calculateMissing(merged_ddf)
-
 
 
 #Fill Blood columns

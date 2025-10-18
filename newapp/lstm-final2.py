@@ -93,15 +93,22 @@ print("Calculate missing values per column")
 help.calculateMissing(merged_ddf)
 
 
-#Fill Blood columns
-blood_imputer=bloodImp.bloodImpute(merged_ddf,blood_columns,200,"filled/all_merged/blood.parquet")
+blood_imputer = bloodImp.bloodImpute(
+    blood_ddf=merged_ddf,
+    blood_columns=blood_columns,
+    sample_target_size=400_000,  # for MICE training sample
+    output_folder="/root/scripts/newapp/filled/all_merged/blood_filled/",  # folder
+    n_output_files=128  # save in 128 Parquets
+)
+
 blood_imputer.run()
+
 
 # -----------------------------
 # 4. Load a sample for evaluation
 # -----------------------------
 # Pick one or a few Parquet batches for evaluation
-merged_filled_blood = dd.read_parquet("filled/all_merged/blood.parquet")
+merged_filled_blood = dd.read_parquet("/root/scripts/newapp/filled/all_merged/blood.parquet/")
 print("Calculate missing values after blood filling")
 help.calculateMissing(merged_ddf)
 cleaned_ddf = InputData.clean_dtypes(merged_filled_blood)

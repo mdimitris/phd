@@ -21,7 +21,7 @@ blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'plate
 gases_columns = ['paco2', 'fio2', 'pao2']
 glucCreat_columns = ["creatinine","glucose"]
 #------------24 hours-------------#
-vitals_dir="filled/vitals_filled.parquet/"
+vitals_dir=r"C:\phd-final\phd\newapp\demo\fiiled\vitals_filled.parquet"
 
 checking_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 dtypes = {
@@ -43,7 +43,8 @@ if os.listdir(vitals_dir) == []:
 
         rows=100000
 
-        df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+        #df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+        df_vitals = dd.read_csv(r"C:\phd-final\phd\vitals_24_hours_final_demo.csv", sep='|', dtype=dtypes)
 
         time_interval=15 
         # 2. Create the imputer object 
@@ -52,12 +53,32 @@ if os.listdir(vitals_dir) == []:
         clean_df = imputer.prepareVitals()
 
         # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
-        df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+        
 
+        # ---------------- Hybrid Temperature Refinement ----------------
+        # Step 1: Aggressive ffill/bfill per stay_id for continuity
+        clean_df = clean_df.map_partitions(
+        vi.vitalsImputeNew.fill_temperature_continuous,
+        meta=clean_df._meta
+        ).persist()
+        #save to parquets filled vitals (no temperature)
+        clean_df.to_parquet(vitals_dir)
+
+        #read to parquets filled vitals (no temperature)
+        df_filled = dd.read_parquet(vitals_dir)
+
+        # Step 2: XGBoost refinement only on originally missing temperature
+        final_ddf_vitals = vi.vitalsImputeNew.xgboost_temperature_refine(clean_df).persist()
+
+        #save again after xgboost for parquets
+        final_ddf_vitals.to_parquet(vitals_dir)
+        # ----------------------------------------------------------------
+        final_ddf_vitals = dd.read_parquet(vitals_dir)
         # Step 3: Run evaluation
-        vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
-        evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
+        vitals_evaluator = ev.Evaluation(imputer,final_ddf_vitals,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
+        evaluation_results = vitals_evaluator.evaluate_masking(final_ddf_vitals,imputer.get_checkingColumns())
         print(evaluation_results)
+exit()
 
 merged_dir='/root/scripts/newapp/unfilled/all_merged.parquet/'
 #merged_dir='unfilled/all_merged.parquet/'       

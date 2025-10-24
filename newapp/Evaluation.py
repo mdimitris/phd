@@ -147,6 +147,7 @@ class Evaluation:
             Example: evaluate XGBoost filling (requires trained self.models)
             """
             results = []
+            #df_full = pd.read_parquet("filled/vitals_filled.parquet")
             df_full = pd.read_parquet("filled/vitals_filled.parquet")
             df_sample = df_full.sample(frac=frac, random_state=42)
 

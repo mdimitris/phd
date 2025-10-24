@@ -157,12 +157,12 @@ class vitalsImputeNew:
         
 
         return df.groupby(['stay_id', 'time_bin'], group_keys=False).apply(_fill_group)
-    
+
 
     def prepareVitals(self, run_xgb=True, train_frac=1.0):
         """
-        Full pipeline: clean → interpolate → (optional) refine with XGBoost.
-        Does NOT run evaluation.
+        Full pipeline: clean → interpolate → hybrid temperature refinement.
+        Returns: Dask DataFrame with fully processed vitals.
         """
         import time
         import dask.dataframe as dd
@@ -175,26 +175,107 @@ class vitalsImputeNew:
         # 2. Interpolation + edge filling (per stay_id + time_bin)
         self.interpolate_and_fill()
 
-        # Reload filled dataset (as Dask for consistency)
+        # 3. Reload filled dataset (Dask for consistency)
         df_filled = dd.read_parquet("filled/vitals_filled.parquet")
 
-        # # 3. XGBoost refinement (optional)
-        # if run_xgb:
-        #     self.xgboost_refine(frac=train_frac)
+        # ---------------- Hybrid Temperature Refinement ----------------
+        # Step 1: Aggressive temperature continuity per stay_id
+        df_filled = df_filled.map_partitions(
+            vitalsImputeNew.fill_temperature_continuous,
+            meta=df_filled._meta
+        ).persist()
+
+        # Step 2: XGBoost refinement for originally missing temperature
+        if run_xgb:
+            df_filled = vitalsImputeNew.xgboost_temperature_refine(df_filled).persist()
+        # ----------------------------------------------------------------
 
         elapsed = time.time() - start_time
         print(f"⏱️ Pipeline finished in {elapsed:.1f} seconds")
 
         return df_filled
+
+
+    # def prepareVitals(self, run_xgb=True, train_frac=1.0):
+    #     """
+    #     Full pipeline: clean → interpolate → (optional) refine with XGBoost.
+    #     Does NOT run evaluation.
+    #     """
+    #     import time
+    #     import dask.dataframe as dd
+
+    #     start_time = time.time()
+
+    #     # 1. Basic cleaning
+    #     self.cleanVitals()
+
+    #     # 2. Interpolation + edge filling (per stay_id + time_bin)
+    #     self.interpolate_and_fill()
+
+
+    #     df_filled = self.xgboost_temperature_refine(df_filled).persist()
+
+    #     # # 3. XGBoost refinement (optional)
+    #     # if run_xgb:
+    #     #     self.xgboost_refine(frac=train_frac)
+
+    #     elapsed = time.time() - start_time
+    #     print(f"⏱️ Pipeline finished in {elapsed:.1f} seconds")
+
+    #     return df_filled
     
 
-    def fill_temperature(g, col='temperature', edge_limit=4):
-        # Forward fill
-        g[col] = g[col].ffill(limit=edge_limit)
-        # Backward fill
-        g[col] = g[col].bfill(limit=edge_limit)
-        return g
-        
+    @staticmethod
+    def fill_temperature_continuous(df):
+        """
+        Forward-fill and backward-fill temperature per stay_id to ensure continuity.
+        Dask-compatible via transform to avoid index mismatch.
+        """
+        df = df.copy()
+        df['charttime'] = pd.to_datetime(df['charttime'])
+        df = df.sort_values(['stay_id', 'charttime'])
+
+        # Dask-safe transform (keeps index)
+        df['temperature'] = df.groupby('stay_id')['temperature'].transform(lambda g: g.ffill().bfill())
+
+        return df
+
+    @staticmethod
+    def xgboost_temperature_refine(df):
+        """
+        Refine temperature using XGBoost, only predicting missing (originally NaN) entries.
+        Fully Dask-compatible using map_partitions, no leakage across stay_ids.
+        """
+        import xgboost as xgb
+
+        feature_cols = ["spo2", "sbp", "dbp", "pulse_pressure",
+                        "heart_rate", "resp_rate", "mbp", "admission_age"]
+
+        def refine_partition(pdf):
+            pdf = pdf.copy()
+            mask = pdf['temperature'].isna()
+            if mask.any():
+                df_obs = pdf[~mask]
+                if len(df_obs) > 0:
+                    X_train = df_obs[feature_cols].astype(float)
+                    y_train = df_obs['temperature'].astype(float)
+
+                    model = xgb.XGBRegressor(
+                        n_estimators=200,
+                        learning_rate=0.05,
+                        max_depth=4,
+                        random_state=42,
+                        tree_method='hist',
+                        n_jobs=1
+                    )
+                    model.fit(X_train, y_train)
+
+                    X_pred = pdf.loc[mask, feature_cols].astype(float)
+                    pdf.loc[mask, 'temperature'] = model.predict(X_pred)
+            return pdf
+
+        return df.map_partitions(refine_partition, meta=df._meta)
+
     # def prepareVitals(self, run_xgb=True):
     #     """
     #     Full pipeline: clean → interpolate → (optional) refine with XGBoost.

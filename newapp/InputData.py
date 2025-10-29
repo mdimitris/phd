@@ -34,13 +34,16 @@ def clean_dtypes(df):
 def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Replace "NULL" with NaN
     ddf = ddf.replace("NULL", None)  # Dask supports None as missing
-    print("Unique patients before cleaning the dask dataframe:", ddf['subject_id'].nunique().compute())
-    print('Rows before droping empties or missing data rows',ddf.shape[0].compute())
+    print("Unique ICU admissions before cleaning the dask dataframe:", len(ddf['stay_id'].drop_duplicates().compute()))
+    print("Unique patients before cleaning the dask dataframe:", len(ddf['subject_id'].drop_duplicates().compute()))
+   
+    print('Rows before droping empties or missing data rows',len(ddf))
 
     # Drop rows that have fewer than thresh_num non-NA values in specified columns
     ddf = ddf.dropna(subset=columns, thresh=thresh_num)
-    print("Unique patients after cleaning the dask dataframe:",  ddf['subject_id'].nunique().compute())
-    print('Rows after droping empties or missing data rows',ddf.shape[0].compute())
+    print("Unique ICU admissions after cleaning the dask dataframe:", len(ddf['stay_id'].drop_duplicates().compute()))
+    print("Unique patients after cleaning the dask dataframe:",  len(ddf['subject_id'].drop_duplicates().compute()))
+    print('Rows after droping empties or missing data rows',len(ddf))
      
     # Convert time field to datetime
     ddf[time_field] = dd.to_datetime(ddf[time_field], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
@@ -54,17 +57,27 @@ def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     return ddf
 
 
-def clearEmpties(df, columns, time_field, thresh_num):
+def clearEmpties(ddf, columns, time_field, thresh_num):
+
+        print ("Patients before starting procedures:",len(ddf['subject_id'].drop_duplicates().compute()))
+        print ("Rows before starting procedures:",len(ddf).compute())
+
         # delete the empty rows
-        df.replace("NULL", pd.NA, inplace=True)
-        df.dropna(subset=columns, how="all", inplace=True)
+        ddf.replace("NULL", pd.NA, inplace=True)
+        ddf.dropna(subset=columns, how="all", inplace=True)
         # delete rows that more than four vitals are missing
-        df.dropna(subset=columns, thresh=thresh_num, inplace=True)
-        df[time_field] = pd.to_datetime(
-            df[time_field], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce"
+        ddf.dropna(subset=columns, thresh=thresh_num, inplace=True)
+        print ("Patients after deleting empties:",len(pd.unique(ddf['subject_id'])))
+        print ("Rows after deletings:",len(ddf).compute())
+        # print("Distinct patients after deleting empties:", ddf['subject_id'].nunique().compute())
+        # print('Rows before after deleting empties:',ddf.shape[0].compute())
+        
+        
+        ddf[time_field] = pd.to_datetime(
+            ddf[time_field], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce"
         )
-        df.sort_values(by=["stay_id", time_field], inplace=True)
-        return df
+        ddf.sort_values(by=["stay_id", time_field], inplace=True)
+        return ddf
 
 def transFloat32 (df, columns):
 
@@ -134,9 +147,9 @@ def mergeDataframes():
     con.execute("""
     CREATE OR REPLACE TABLE all_merged AS
     WITH vitals_blood AS (
-        SELECT *
-        FROM read_parquet('filled/vitals_filled.parquet') AS vitals
-        ASOF LEFT JOIN read_parquet('unfilled/blood.parquet') AS blood
+        SELECT *           
+        FROM read_parquet('/root/scripts/newapp/secondrun/vitals_filled.parquet/*.parquet') AS vitals
+        ASOF LEFT JOIN read_parquet('/root/scripts/newapp/secondrun/unfilled/blood.parquet/*.parquet') AS blood
         ON vitals.stay_id = blood.stay_id
         AND CAST(vitals.charttime AS TIMESTAMP) >= CAST(blood.charttime AS TIMESTAMP)
         AND CAST(vitals.charttime AS TIMESTAMP) - CAST(blood.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -145,7 +158,7 @@ def mergeDataframes():
     vitals_blood_gases AS (
         SELECT *
         FROM vitals_blood AS vb
-        ASOF LEFT JOIN read_parquet('unfilled/gases.parquet') AS gases
+        ASOF LEFT JOIN read_parquet('/root/scripts/newapp/secondrun/unfilled/gases.parquet/*.parquet') AS gases
         ON vb.stay_id = gases.stay_id
         AND CAST(vb.charttime AS TIMESTAMP) >= CAST(gases.charttime AS TIMESTAMP)
         AND CAST(vb.charttime AS TIMESTAMP) - CAST(gases.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -154,7 +167,7 @@ def mergeDataframes():
     final_merge AS (
         SELECT *
         FROM vitals_blood_gases AS vbg
-        ASOF LEFT JOIN read_parquet('unfilled/glucCreat.parquet') AS gluc
+        ASOF LEFT JOIN read_parquet('/root/scripts/newapp/secondrun/unfilled/glucCreat.parquet/*.parquet') AS gluc
         ON vbg.stay_id = gluc.stay_id
         AND CAST(vbg.charttime AS TIMESTAMP) >= CAST(gluc.charttime AS TIMESTAMP)
         AND CAST(vbg.charttime AS TIMESTAMP) - CAST(gluc.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -192,7 +205,7 @@ def mergeDataframes():
     con.register("cleaned_data", df_merged_data)
     con.execute("""
         COPY cleaned_data
-        TO 'unfilled/all_merged.parquet'
+        TO '/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/'
         (FORMAT PARQUET, PARTITION_BY (bucket), OVERWRITE TRUE);
     """)
 
@@ -200,7 +213,7 @@ def mergeDataframes():
     print("Each stay_id is fully contained within a single bucket and unwanted columns are removed.")
 
     # 6️⃣ Return as Dask DataFrame for further processing
-    all_merged = dd.read_parquet("unfilled/all_merged.parquet")
+    all_merged = dd.read_parquet("/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/")
     return all_merged
 
 

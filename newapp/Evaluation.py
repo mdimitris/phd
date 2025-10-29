@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer
 from sklearn.linear_model import BayesianRidge
-from sklearn.metrics import mean_absolute_error, root_mean_squared_error,r2_score,roc_auc_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, roc_auc_score
 import InputData
 import xgBoostFill as xgbFill
 import random
@@ -126,7 +126,8 @@ class Evaluation:
                 
                 # Metrics
                 maes.append(mean_absolute_error(true_vals, imputed_vals))
-                mses.append(root_mean_squared_error(true_vals, imputed_vals))
+                #mses.append(root_mean_squared_error(true_vals, imputed_vals))
+                mses.append(np.sqrt(mean_squared_error(true_vals, imputed_vals)))
                 r2s.append(r2_score(true_vals, imputed_vals))
 
             print("start evaluation append")
@@ -179,7 +180,8 @@ class Evaluation:
                     y_pred = model.predict(X_eval)
 
                     maes.append(mean_absolute_error(true_vals, y_pred))
-                    rmses.append(np.sqrt(root_mean_squared_error(true_vals, y_pred)))
+                    #rmses.append(np.sqrt(root_mean_squared_error(true_vals, y_pred)))
+                    rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
                     r2s.append(r2_score(true_vals, y_pred))
 
                 if maes:
@@ -279,7 +281,8 @@ class Evaluation:
 
         # --- Compute metrics
         mae = mean_absolute_error(true_vals_clean, preds_clean)
-        rmse = root_mean_squared_error(true_vals_clean, preds_clean)
+        rmse = np.sqrt(mean_squared_error(true_vals_clean, preds_clean))
+        #rmse = root_mean_squared_error(true_vals_clean, preds_clean)
         r2 = r2_score(true_vals_clean, preds_clean)
 
         return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}

@@ -13,8 +13,9 @@ import tracemalloc
 import gc
 import dask.dataframe as dd
 import shutil
-import xgboost as xgb
-from InputData import *
+
+import xgBoostFill as xgb
+import InputData
 
 class vitalsImputeNew:
 
@@ -47,8 +48,8 @@ class vitalsImputeNew:
         label fixing, and dtype optimization.
         """
 
-        self.vitals = clearEmpties_ddf (self.vitals, self.checkingColumns, "charttime", 3)
-
+        self.vitals = InputData.clearEmpties_ddf (self.vitals, self.checkingColumns, "charttime", 3)
+        self.checkingColumns.append('temperature')
         # Create 15-min bins
         self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
         self.vitals["time_bin"] =self.vitals["charttime"].dt.floor("15min")
@@ -112,8 +113,8 @@ class vitalsImputeNew:
         self.vitals = self.vitals.set_index("stay_id", sorted=False, drop=False)
         self.vitals = self.vitals.repartition(npartitions=128)
         #add temperature in columns for interpolation
-        print('add temperature in checking columns and start partition filling')
-        self.checkingColumns.append("temperature")
+        print('Start partition filling')
+        
         # Apply imputation respecting stay_id + time_bin
         self.vitals = self.vitals.map_partitions(
             vitalsImputeNew.fillVitals_partition,
@@ -123,7 +124,7 @@ class vitalsImputeNew:
 
         # Save after interpolation
         print('Start saving filled data to parquets')
-        self.vitals.to_parquet("filled/vitals_filled.parquet", write_index=False)
+        self.vitals.to_parquet("/root/scripts/newapp/secondrun/vitals_filled.parquet/", write_index=False)
         print("💾 Saved interpolated vitals → filled/vitals_filled.parquet")
         # Check missing values only in checkingColumns
         missing_summary = self.vitals[self.checkingColumns].isna().sum().compute()
@@ -148,15 +149,18 @@ class vitalsImputeNew:
 
         # Group by stay_id AND existing 15-min time_bin
         def _fill_group(g):
+
             # Interpolate only interior gaps
             g[vital_cols] = g[vital_cols].interpolate(method='linear', limit_area='inside')
+
+            g['temperature'] = g['temperature'].ffill(limit=8).bfill(limit=8).interpolate(method='linear', limit_area='inside')
             # Optionally fill small edge gaps
             if edge_limit is not None and edge_limit > 0:
                 g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).bfill(limit=edge_limit)
             return g
         
 
-        return df.groupby(['stay_id', 'time_bin'], group_keys=False).apply(_fill_group)
+        return df.groupby(['stay_id', 'time_bin'],  group_keys=False).apply(_fill_group)
     
 
     def prepareVitals(self, run_xgb=True, train_frac=1.0):
@@ -176,25 +180,116 @@ class vitalsImputeNew:
         self.interpolate_and_fill()
 
         # Reload filled dataset (as Dask for consistency)
-        df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+        #df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+        df_filled = dd.read_parquet("/root/scripts/newapp/secondrun/vitals_filled.parquet/")
 
-        # # 3. XGBoost refinement (optional)
+        #run it for filling temperature more aggressively
+        df_filled = df_filled.map_partitions(
+            vitalsImputeNew.fill_temperature_continuous,
+            meta=df_filled._meta
+        ).persist()
+        
+        # # 3. XGBoost refinement for temperature (optional)
         # if run_xgb:
-        #     self.xgboost_refine(frac=train_frac)
+        #     print('start LightGBM for temperature')
+        #     feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure","spo2", "fio2",
+        #     "glucose", "wbc", "creatinine"]
+        #     # self.xgboost_refine(frac=train_frac)
+        #     dd_temperature = xgb.xgBoostFill(['temperature'],feature_cols)
+        #     dd_temperature.fit(df_filled)
+            #self, target_columns, features, random_state=42,feature_map=None
 
         elapsed = time.time() - start_time
         print(f"⏱️ Pipeline finished in {elapsed:.1f} seconds")
 
         return df_filled
     
+    def transform(self, df):
+        """
+        Fill missing vitals in the given DataFrame using the same logic as self.vitals.
+        Works with both pandas and Dask DataFrames.
+        """
+        import dask.dataframe as dd
 
-    def fill_temperature(g, col='temperature', edge_limit=4):
-        # Forward fill
-        g[col] = g[col].ffill(limit=edge_limit)
-        # Backward fill
-        g[col] = g[col].bfill(limit=edge_limit)
-        return g
-        
+        # Detect if input is pandas
+        is_pandas = isinstance(df, pd.DataFrame)
+
+        if is_pandas:
+            df_copy = dd.from_pandas(df, npartitions=8)
+        else:
+            df_copy = df.copy()
+
+        # Ensure charttime is datetime
+        df_copy['charttime'] = dd.to_datetime(df_copy['charttime'], errors='coerce')
+
+        # Create time_bin if not exists
+        if 'time_bin' not in df_copy.columns:
+            df_copy['time_bin'] = df_copy['charttime'].dt.floor('15min')
+
+        # Fill using the static method
+        df_filled = df_copy.map_partitions(
+            vitalsImputeNew.fillVitals_partition,
+            self.checkingColumns,
+            meta=df_copy._meta
+        )
+
+        # Return pandas if original was pandas
+        if is_pandas:
+            return df_filled.compute()
+        return df_filled
+    
+    
+    @staticmethod
+    def fill_temperature_continuous(df):
+        """
+        Forward-fill and backward-fill temperature per stay_id to ensure continuity.
+        Dask-compatible via transform to avoid index mismatch.
+        """
+        print('start filling temperature again')
+        df = df.copy()
+        df['charttime'] = pd.to_datetime(df['charttime'])
+        df = df.sort_values(['stay_id', 'charttime'])
+
+        # Dask-safe transform (keeps index)
+        df['temperature'] = df.groupby('stay_id')['temperature'].transform(lambda g: g.ffill().bfill())
+
+        return df
+
+    # @staticmethod
+    # def xgboost_temperature_refine(df):
+    #     """
+    #     Refine temperature using XGBoost, only predicting missing (originally NaN) entries.
+    #     Fully Dask-compatible using map_partitions, no leakage across stay_ids.
+    #     """
+    #     import xgboost as xgb
+
+    #     feature_cols = ["spo2", "sbp", "dbp", "pulse_pressure",
+    #                     "heart_rate", "resp_rate", "mbp", "admission_age"]
+
+    #     def refine_partition(pdf):
+    #         pdf = pdf.copy()
+    #         mask = pdf['temperature'].isna()
+    #         if mask.any():
+    #             df_obs = pdf[~mask]
+    #             if len(df_obs) > 0:
+    #                 X_train = df_obs[feature_cols].astype(float)
+    #                 y_train = df_obs['temperature'].astype(float)
+
+    #                 model = xgb.XGBRegressor(
+    #                     n_estimators=200,
+    #                     learning_rate=0.05,
+    #                     max_depth=4,
+    #                     random_state=42,
+    #                     tree_method='hist',
+    #                     n_jobs=1
+    #                 )
+    #                 model.fit(X_train, y_train)
+
+    #                 X_pred = pdf.loc[mask, feature_cols].astype(float)
+    #                 pdf.loc[mask, 'temperature'] = model.predict(X_pred)
+    #         return pdf
+
+    #     return df.map_partitions(refine_partition, meta=df._meta)
     # def prepareVitals(self, run_xgb=True):
     #     """
     #     Full pipeline: clean → interpolate → (optional) refine with XGBoost.

@@ -1,7 +1,7 @@
 import pandas as pd
 import dask.dataframe as dd
 
-def prepareDataset(ddf, blood_cols,drop_cols,type):
+def prepareDataset(ddf, blood_cols,drop_cols,dataset):
     #first delete rows that all data are missing
         #ddf = ddf.drop(columns=["rdwsd","admittime"])
         ddf = ddf.drop(columns=drop_cols)
@@ -11,7 +11,7 @@ def prepareDataset(ddf, blood_cols,drop_cols,type):
         #ddf=ddf.drop('rdwsd', axis=1)
         #ddf.drop(columns=['rdwsd'], inplace=True, errors='ignore')
         #save to parquet in order to use it later
-        ddf.to_parquet(f"unfilled/{type}.parquet", write_index=False)
+        ddf.to_parquet(f"/root/scripts/newapp/secondrun/unfilled/{dataset}.parquet", write_index=False)
         print(type,'dataset saved to parquet and it is ready for later usage.')
         # return ddf
 

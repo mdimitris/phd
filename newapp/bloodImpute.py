@@ -1,191 +1,181 @@
-import dask.dataframe as dd
-import pandas as pd
-import numpy as np
 import os
 import gc
+import pandas as pd
+import dask.dataframe as dd
 import miceforest as mf
+from miceforest import builtin_mean_match_schemes as schemes
 
 class bloodImpute:
-    def __init__(self, blood, blood_columns, batch_size, output_dir, max_batches=128):
-        """
-        Parameters
-        ----------
-        blood : dask.DataFrame
-            The merged dataframe containing blood data.
-        blood_columns : list[str]
-            Columns to apply MICE imputation on.
-        batch_size : int
-            Number of stay_ids per batch.
-        output_dir : str
-            Directory where imputed batches will be saved.
-        """
-        self.blood = blood
+    def __init__(
+        self,
+        blood_ddf,
+        blood_columns,
+        sample_size,
+        output_folder,
+        model_path=None,
+        n_output_files=64,
+    ):
+        self.blood = blood_ddf
         self.blood_columns = blood_columns
-        self.batch_size = batch_size
-        self.output_dir = output_dir
-        self.max_batches = max_batches
+        self.sample_size = sample_size
+        self.output_folder = output_folder
+        self.model_path = model_path or "/root/scripts/newapp/filled/models/global_blood_kernel.pkl"
+        self.kds_global = None
+        self.n_output_files = n_output_files
 
-        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.output_folder, exist_ok=True)
+        os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
 
-    # --------------------------------------------------------------------------
-    def prefill_dask(self):
-        """
-        Forward-fill, backward-fill, and interpolate numeric blood columns
-        grouped by stay_id.
-        """
-        print("🩸 Starting ffill/bfill/interpolation in blood columns...")
+    # --------------------------------------------------
+    # STEP 1: Prefill missing values by stay_id
+    # --------------------------------------------------
+    def prefill(self):
+        print("🩸 Prefill missing values by stay_id...")
 
-        # ✅ Ensure stay_id exists and is numeric/string consistently
         if "stay_id" not in self.blood.columns:
-            raise ValueError("❌ 'stay_id' column not found in blood dataframe!")
-        self.blood["stay_id"] = self.blood["stay_id"].astype(str)
+            raise ValueError("'stay_id' column not found!")
 
-        # ✅ Explicit Dask meta
-        meta = {col: "f4" for col in self.blood_columns}
-
-        def fill_group(df):
-            return df.ffill().bfill().interpolate(method="linear")
-
-        try:
-            filled = (
-                self.blood.groupby("stay_id")[self.blood_columns]
-                .apply(fill_group, meta=meta)
-            )
-            # ✅ Properly merge ffilled data
-            for col in self.blood_columns:
-                self.blood[col] = filled[col]
-        except Exception as e:
-            raise RuntimeError(f"❌ Error during interpolation step: {e}")
-
-        print("✅ Prefill (ffill/bfill/interpolate) done.")
-
-    # --------------------------------------------------------------------------
-
-
-    def batch_mice_imputation(self):
-        """
-        Runs MICE imputation in batches by stay_id and saves each batch to Parquet.
-        Fully Dask-safe to avoid KeyErrors related to dtype mappings.
-        """
-        print("🧩 Starting MICE imputation for blood columns...")
-
-        if self.blood is None:
-            raise ValueError("❌ self.blood is not initialized.")
-        if self.batch_size <= 0:
-            raise ValueError(f"❌ Invalid batch_size: {self.batch_size}")
-
-        # ----------------------------
-        # 1️⃣ Ensure stay_id is int32 and persist
-        # ----------------------------
-        if "stay_id" not in self.blood.columns:
-            raise ValueError("❌ 'stay_id' column not found in self.blood!")
         self.blood["stay_id"] = self.blood["stay_id"].astype("int32")
-        self.blood = self.blood.persist()  # stabilize _meta across partitions
 
-        # ----------------------------
-        # 2️⃣ Get unique stay_ids
-        # ----------------------------
+        numeric_cols = [
+            c for c in self.blood_columns
+            if pd.api.types.is_numeric_dtype(self.blood[c].dtype)
+        ]
+        if not numeric_cols:
+            raise ValueError("No numeric blood columns found for prefill!")
+
+        def fill_group(pdf):
+            pdf[numeric_cols] = (
+                pdf[numeric_cols]
+                .ffill()
+                .bfill()
+                .interpolate(method="linear", limit_direction="both")
+            )
+            return pdf
+
+        if isinstance(self.blood, dd.DataFrame):
+            self.blood = self.blood.map_partitions(
+                lambda pdf: pdf.groupby("stay_id", group_keys=False).apply(fill_group)
+            )
+        else:
+            self.blood = self.blood.groupby("stay_id", group_keys=False).apply(fill_group).reset_index(drop=True)
+
+        print("✅ Prefill complete.")
+
+    # --------------------------------------------------
+    # STEP 2: Train global MICE model
+    # --------------------------------------------------
+    def train_global_model(self, iterations=4):
+        print("\n🧠 Training global MICE model...")
+        
+        # print(mf.__version__)
+        # print(mf.ImputationKernel.__doc__)
+        # print(mf.__file__)
+
+        # Only use rows with missing values
+        if isinstance(self.blood, dd.DataFrame):
+            sample_df = self.blood[self.blood_columns].sample(frac=1.0).head(self.sample_size)
+        else:
+            sample_df = self.blood[self.blood_columns].sample(
+                n=min(self.sample_size, len(self.blood)), random_state=42
+            )
+
+        sample_df = sample_df.astype("float32")
+
+        if sample_df.isnull().sum().sum() == 0:
+            print("⚠️ No missing values found — skipping MICE training.")
+            return False
+        mean_match = schemes.mean_match_default
+        self.kds_global = mf.ImputationKernel(
+            data=sample_df,
+            save_all_iterations=False,
+            random_state=42,
+            data_subset=0.7,
+            mean_match_scheme=mean_match,
+            # mean_match_candidates=5,
+            datasets=1
+        )
+        self.kds_global.mice(iterations=iterations,n_jobs=os.cpu_count())
+        self.kds_global.save_kernel(self.model_path)
+        print(f"✅ Global MICE model trained and saved at {self.model_path}")
+        return True
+
+    # --------------------------------------------------
+    # STEP 3: Apply global MICE kernel batch-wise
+    # --------------------------------------------------
+    def apply_global_model(self):
+        print("\n💉 Applying global MICE model to full dataset...")
+
+        if self.kds_global is None:
+            if os.path.exists(self.model_path):
+                # Initialize dummy row (needed for miceforest 5.6.2)
+                dummy_df = pd.DataFrame([[0.0]*len(self.blood_columns)], columns=self.blood_columns)
+                self.kds_global = mf.ImputationKernel(dummy_df, datasets=1)
+                self.kds_global.load_kernel(self.model_path)
+            else:
+                print("⚠️ No MICE model found — will save Parquets without imputation.")
+
+        # Unique stay_ids
         unique_stays = self.blood["stay_id"].drop_duplicates().compute().to_numpy()
         unique_stays = [s for s in unique_stays if pd.notna(s)]
-        n_stays = len(unique_stays)
-        print(f"Total unique stay_id: {n_stays}")
-
-        if n_stays == 0:
-            raise ValueError("❌ No valid stay_id values found in self.blood — cannot batch impute.")
-
+        batch_size = max(1, len(unique_stays) // self.n_output_files)
         batch_num = 0
 
-        # ----------------------------
-        # 3️⃣ Loop over batches
-        # ----------------------------
-        for i in range(0, n_stays, self.batch_size):
-            if batch_num >= self.max_batches:
-                print(f"Reached limit of {self.max_batches} Parquet files. Stopping early.")
-                break
-
-            batch_stays = unique_stays[i:i + self.batch_size]
-            if not batch_stays:
-                print(f"⚠️ Empty batch {batch_num}, skipping.")
-                continue
-
-            print(f"🧠 Processing batch {batch_num + 1}/{self.max_batches} "
-                f"({len(batch_stays)} patients)")
-
-            # ----------------------------
-            # 4️⃣ Filter Dask dataframe safely
-            # ----------------------------
-            try:
-                batch_ddf = self.blood[self.blood["stay_id"].isin(batch_stays)]
-
-                # ----------------------------
-                # 5️⃣ Cast numeric blood columns to float32 for MICE
-                # ----------------------------
-                batch_ddf[self.blood_columns] = batch_ddf[self.blood_columns].map_partitions(
-                    lambda df: df.astype("float32")
-                )
-
-                # ----------------------------
-                # 6️⃣ Compute to Pandas safely
-                # ----------------------------
-                batch_df = batch_ddf.compute()
-            except Exception as e:
-                print(f"❌ Failed to prepare batch {batch_num}: {e}")
-                continue
-
-            if batch_df.empty:
-                print(f"⚠️ Batch {batch_num} is empty, skipping.")
-                continue
-
-            # ----------------------------
-            # 7️⃣ Run MICE imputation
-            # ----------------------------
-            try:
-                kds = mf.ImputationKernel(
-                    batch_df[self.blood_columns],
-                    save_all_iterations=False,
-                    random_state=42
-                )
-                kds.mice(iterations=3)
-                df_imputed = kds.complete_data(dataset=0)
-            except Exception as e:
-                print(f"❌ Error running MICE on batch {batch_num}: {e}")
-                continue
-
-            # ----------------------------
-            # 8️⃣ Reattach non-lab columns
-            # ----------------------------
-            columns_excluded = [c for c in batch_df.columns if c not in self.blood_columns]
-            batch_final = pd.concat(
-                [
-                    batch_df[columns_excluded].reset_index(drop=True),
-                    df_imputed.reset_index(drop=True),
-                ],
-                axis=1,
+        for i in range(0, len(unique_stays), batch_size):
+            batch_stays = unique_stays[i:i + batch_size]
+            batch_ddf = self.blood[self.blood["stay_id"].isin(batch_stays)]
+            batch_ddf[self.blood_columns] = batch_ddf[self.blood_columns].map_partitions(
+                lambda df: df.astype("float32")
             )
 
-            # ----------------------------
-            # 9️⃣ Save batch to Parquet
-            # ----------------------------
-            batch_file = os.path.join(self.output_dir, f"batch_{batch_num:03d}.parquet")
-            try:
-                batch_final.to_parquet(batch_file, index=False)
-                print(f"💾 Saved batch {batch_num + 1} → {batch_file}")
-            except Exception as e:
-                print(f"❌ Failed to save batch {batch_num}: {e}")
+            batch_df = batch_ddf.compute()
+            if batch_df.empty:
+                batch_num += 1
+                continue
 
-            # ----------------------------
-            # 10️⃣ Cleanup
-            # ----------------------------
-            batch_num += 1
+            # Only run MICE if missing values exist and global kernel exists
+            if self.kds_global and batch_df[self.blood_columns].isnull().sum().sum() > 0:
+                kds = self.kds_global.impute_new_data(batch_df[self.blood_columns])
+                df_imputed = kds.complete_data(0)
+            else:
+                df_imputed = batch_df[self.blood_columns].copy()
+
+            other_cols = [c for c in batch_df.columns if c not in self.blood_columns]
+            batch_final = pd.concat(
+                [batch_df[other_cols].reset_index(drop=True),
+                 df_imputed.reset_index(drop=True)],
+                axis=1
+            )
+
+            batch_file = os.path.join(self.output_folder, f"filledBlood_{batch_num:03d}.parquet")
+            batch_final.to_parquet(batch_file, index=False)
+            print(f"💾 Saved batch {batch_num + 1} → {batch_file}")
+
             del batch_df, df_imputed, batch_final
             gc.collect()
+            batch_num += 1
 
-        print("✅ MICE imputation completed for all batches.")
+        print("✅ Global MICE applied (or skipped) and all Parquets saved.")
 
-
-    # --------------------------------------------------------------------------
+    # --------------------------------------------------
+    # STEP 4: Run full pipeline
+    # --------------------------------------------------
     def run(self):
-        print("***** Starting Lab Imputation Pipeline ******")
-        self.prefill_dask()
-        self.batch_mice_imputation()
-        print("✅ Lab imputation finished. All batches saved to:", self.output_dir)
+        print("\n🚀 Running full blood imputation pipeline...\n")
+        self.prefill()
+        print('empty after prefill blodd columns:')
+        print(self.blood[self.blood_columns].isna().sum())
+        self.train_global_model()
+        self.apply_global_model()
+        print("\n✅ Pipeline complete: Prefill + MICE (or Parquets only) done.")
+
+    def transform(self, df):
+        # If using global kernel
+        df_copy = df.copy().reset_index(drop=True)
+
+        # Only fill blood columns
+        if self.kds_global and df_copy[self.blood_columns].isnull().sum().sum() > 0:
+            kds = self.kds_global.impute_new_data(df_copy[self.blood_columns])
+            df_copy[self.blood_columns] = kds.complete_data(0)
+
+        return df_copy

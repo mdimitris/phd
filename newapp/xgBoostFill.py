@@ -52,7 +52,7 @@ class xgBoostFill:
             train_df = df.dropna(subset=[target])
             if train_df.empty:
                 continue
-            X_train = self.clean_dtypes(train_df[features])
+            X_train = self.clean_dtypes(train_df[features]) 
             y_train = train_df[target].astype("float32")
             model = lgb.LGBMRegressor(
                 n_estimators=500,

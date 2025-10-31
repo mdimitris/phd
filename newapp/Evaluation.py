@@ -148,8 +148,8 @@ class Evaluation:
             Example: evaluate XGBoost filling (requires trained self.models)
             """
             results = []
-            df_full = pd.read_parquet("filled/vitals_filled.parquet")
-            df_sample = df_full.sample(frac=frac, random_state=42)
+            df_full = pd.read_parquet("filled/vitals_filled.parquet") 
+            df_sample = df_full.sample(frac=frac, random_state=42) d
 
             for target, (model, feature_cols) in self.models.items():
                 print(f"\n📊 Evaluating {target}...")

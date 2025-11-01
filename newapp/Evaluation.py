@@ -52,151 +52,150 @@ class Evaluation:
     # clean_df = original clean dataset (NO missing values)
     # df_with_nans = your real ICU dataset (WITH missing values)
 
-    def simulate_and_evaluate_dask_filling(self):
-        """
-        Simulate missingness and evaluate your Dask fill pipeline.
-        Uses vitalsImputeNew.fillVitals_partition to impute.
-        """
+    # def simulate_and_evaluate_dask_filling(self):
+    #     """
+    #     Simulate missingness and evaluate your Dask fill pipeline.
+    #     Uses vitalsImputeNew.fillVitals_partition to impute.
+    #     """
     
-        results = []
+    #     results = []
 
-        # Work on a small sample (so we can compute in memory)
-        df_sample =  self.data.sample(frac=0.4).compute()  # 1% sample → Pandas
-        df_sample = df_sample.reset_index()
-        print('Evaluation Sample dataframe for vitals:')
-        print(df_sample.info())
+    #     # Work on a small sample (so we can compute in memory)
+    #     df_sample =  self.data.sample(frac=0.4).compute()  # 1% sample → Pandas
+    #     df_sample = df_sample.reset_index()
+    #     print('Evaluation Sample dataframe for vitals:')
+    #     print(df_sample.info())
  
-        df_sample["charttime"] = pd.to_datetime(df_sample["charttime"], errors="coerce")
-        df_sample = df_sample.dropna(subset=["stay_id", "charttime"])
-        df_sample = df_sample.sort_values(["stay_id", "charttime"])
+    #     df_sample["charttime"] = pd.to_datetime(df_sample["charttime"], errors="coerce")
+    #     df_sample = df_sample.dropna(subset=["stay_id", "charttime"])
+    #     df_sample = df_sample.sort_values(["stay_id", "charttime"])
 
-        for col in self.columns_to_fill:
-            maes, mses, r2s = [], [], []
-            for _ in range(self.n_runs):
-                df_copy = df_sample.copy()
+    #     for col in self.columns_to_fill:
+    #         maes, mses, r2s = [], [], []
+    #         for _ in range(self.n_runs):
+    #             df_copy = df_sample.copy()
 
-                # Create a mask column
-                df_copy["mask_flag"] = False
-                mask = np.random.rand(len(df_copy)) < self.mask_rate
-                df_copy.loc[mask, "mask_flag"] = True
+    #             # Create a mask column
+    #             df_copy["mask_flag"] = False
+    #             mask = np.random.rand(len(df_copy)) < self.mask_rate
+    #             df_copy.loc[mask, "mask_flag"] = True
 
-                true_vals = df_copy.loc[df_copy["mask_flag"], col]
-                df_copy.loc[df_copy["mask_flag"], col] = np.nan
+    #             true_vals = df_copy.loc[df_copy["mask_flag"], col]
+    #             df_copy.loc[df_copy["mask_flag"], col] = np.nan
 
-                # Convert back to Dask
-                ddf_masked = dd.from_pandas(df_copy, npartitions=4)
+    #             # Convert back to Dask
+    #             ddf_masked = dd.from_pandas(df_copy, npartitions=4)
 
-                if 'paco2' in df_copy.columns:
+    #             if 'paco2' in df_copy.columns:
                         
-                        df_gases=gases_imputer.prepareGases()
-                        ddf_filled = ddf_masked.map_partitions(
-                        gi.gasesImpute.imputeGases
-                    )
+    #                     df_gases=gases_imputer.prepareGases()
+    #                     ddf_filled = ddf_masked.map_partitions(
+    #                     gi.gasesImpute.imputeGases
+    #                 )
 
-                else:
-                    ddf_filled = ddf_masked.map_partitions(
-                        vitalsImputeNew.vitalsImputeNew.fillVitals_partition,
-                        self.columns_to_fill,
-                        meta=ddf_masked._meta
-                    )
+    #             else:
+    #                 ddf_filled = ddf_masked.map_partitions(
+    #                     vitalsImputeNew.vitalsImputeNew.fillVitals_partition,
+    #                     self.columns_to_fill,
+    #                     meta=ddf_masked._meta
+    #                 )
 
-                df_filled = ddf_filled.compute()
-                if 'paco2' in df_filled.columns:
-                    df_filled.dropna(subset = ['paco2', 'fio2', 'pao2'],inplace=True)
-                else:
-                    df_filled.dropna(subset = ['spo2', 'sbp', 'dbp','pulse_pressure','heart_rate','resp_rate','mbp','temperature'],inplace=True)
+    #             df_filled = ddf_filled.compute()
+    #             if 'paco2' in df_filled.columns:
+    #                 df_filled.dropna(subset = ['paco2', 'fio2', 'pao2'],inplace=True)
+    #             else:
+    #                 df_filled.dropna(subset = ['spo2', 'sbp', 'dbp','pulse_pressure','heart_rate','resp_rate','mbp','temperature'],inplace=True)
                
 
-                # Collect imputed values based on mask_flag
-                imputed_vals = df_filled.loc[df_filled["mask_flag"], col]
+    #             # Collect imputed values based on mask_flag
+    #             imputed_vals = df_filled.loc[df_filled["mask_flag"], col]
 
-                # Ensure alignment (drop NAs in true_vals too)
-                true_vals = true_vals.loc[imputed_vals.index]
+    #             # Ensure alignment (drop NAs in true_vals too)
+    #             true_vals = true_vals.loc[imputed_vals.index]
                 
-              # 1. Restrict to common index only
-                common_idx = true_vals.index.intersection(imputed_vals.index)
+    #           # 1. Restrict to common index only
+    #             common_idx = true_vals.index.intersection(imputed_vals.index)
 
-                true_vals = true_vals.loc[common_idx]
-                imputed_vals = imputed_vals.loc[common_idx]
+    #             true_vals = true_vals.loc[common_idx]
+    #             imputed_vals = imputed_vals.loc[common_idx]
 
-                # 2. Drop NaNs together
-                mask = true_vals.notna() & imputed_vals.notna()
-                true_vals = true_vals[mask]
-                imputed_vals = imputed_vals[mask]
+    #             # 2. Drop NaNs together
+    #             mask = true_vals.notna() & imputed_vals.notna()
+    #             true_vals = true_vals[mask]
+    #             imputed_vals = imputed_vals[mask]
                 
-                # Metrics
-                maes.append(mean_absolute_error(true_vals, imputed_vals))
-                #mses.append(root_mean_squared_error(true_vals, imputed_vals))
-                mses.append(np.sqrt(mean_squared_error(true_vals, imputed_vals)))
-                r2s.append(r2_score(true_vals, imputed_vals))
+    #             # Metrics
+    #             maes.append(mean_absolute_error(true_vals, imputed_vals))
+    #             #mses.append(root_mean_squared_error(true_vals, imputed_vals))
+    #             mses.append(np.sqrt(mean_squared_error(true_vals, imputed_vals)))
+    #             r2s.append(r2_score(true_vals, imputed_vals))
 
-            print("start evaluation append")
-            results.append({
-                "Feature": col,
-                "MAE": np.mean(maes),
-                #"MSE": np.mean(mses),
-                "RMSE": np.sqrt(np.mean(mses)),
-                "R2": np.mean(r2s),
-            })
+    #         print("start evaluation append")
+    #         results.append({
+    #             "Feature": col,
+    #             "MAE": np.mean(maes),
+    #             #"MSE": np.mean(mses),
+    #             "RMSE": np.sqrt(np.mean(mses)),
+    #             "R2": np.mean(r2s),
+    #         })
 
-        return pd.DataFrame(results)
+    #     return pd.DataFrame(results)
     
 
 
-    def evaluate_xgboost_filling(self, frac=0.2, mask_rate=0.3, n_runs=3):
-            """
-            Example: evaluate XGBoost filling (requires trained self.models)
-            """
-            results = []
-            #df_full = pd.read_parquet("filled/vitals_filled.parquet")
-            df_full = pd.read_parquet("filled/vitals_filled.parquet")
-            df_sample = df_full.sample(frac=frac, random_state=42)
+    # def evaluate_xgboost_filling(self, frac=0.2, mask_rate=0.3, n_runs=3):
+    #         """
+    #         Example: evaluate XGBoost filling (requires trained self.models)
+    #         """
+    #         results = []
+    #         df_full = pd.read_parquet("filled/vitals_filled.parquet") 
+    #         df_sample = df_full.sample(frac=frac, random_state=42) 
 
-            for target, (model, feature_cols) in self.models.items():
-                print(f"\n📊 Evaluating {target}...")
-                maes, rmses, r2s = [], [], []
-                for _ in range(n_runs):
-                    known_idx = df_sample[target].dropna().index
-                    if len(known_idx) < 10:
-                        continue
+    #         for target, (model, feature_cols) in self.models.items():
+    #             print(f"\n📊 Evaluating {target}...")
+    #             maes, rmses, r2s = [], [], []
+    #             for _ in range(n_runs):
+    #                 known_idx = df_sample[target].dropna().index
+    #                 if len(known_idx) < 10:
+    #                     continue
 
-                    masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
-                    true_vals = df_sample.loc[masked_idx, target]
-                    df_sample.loc[masked_idx, target] = np.nan
+    #                 masked_idx = random.sample(list(known_idx), int(mask_rate * len(known_idx)))
+    #                 true_vals = df_sample.loc[masked_idx, target]
+    #                 df_sample.loc[masked_idx, target] = np.nan
 
-                    X_eval = df_sample.loc[masked_idx, feature_cols]
-                    valid_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
-                    X_eval, true_vals = X_eval[valid_mask], true_vals[valid_mask]
+    #                 X_eval = df_sample.loc[masked_idx, feature_cols]
+    #                 valid_mask = (~X_eval.isna().any(axis=1)) & (~true_vals.isna())
+    #                 X_eval, true_vals = X_eval[valid_mask], true_vals[valid_mask]
 
-                    if len(true_vals) == 0:
-                        continue
+    #                 if len(true_vals) == 0:
+    #                     continue
                     
-                    evalImputer = xgbFill.xgBoostFill(
-                            target_columns=[],
-                            features=feature_cols,
-                            random_state=42
-                    )
+    #                 evalImputer = xgbFill.xgBoostFill(
+    #                         target_columns=[],
+    #                         features=feature_cols,
+    #                         random_state=42
+    #                 )
                     
-                    X_eval = evalImputer.clean_dtypes(X_eval)
-                    y_pred = model.predict(X_eval)
+    #                 X_eval = evalImputer.clean_dtypes(X_eval)
+    #                 y_pred = model.predict(X_eval)
 
-                    maes.append(mean_absolute_error(true_vals, y_pred))
-                    #rmses.append(np.sqrt(root_mean_squared_error(true_vals, y_pred)))
-                    rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
-                    r2s.append(r2_score(true_vals, y_pred))
+    #                 maes.append(mean_absolute_error(true_vals, y_pred))
+    #                 #rmses.append(np.sqrt(root_mean_squared_error(true_vals, y_pred)))
+    #                 rmses.append(np.sqrt(mean_squared_error(true_vals, y_pred)))
+    #                 r2s.append(r2_score(true_vals, y_pred))
 
-                if maes:
-                    results.append({
-                        "Feature": target,
-                        "MAE": np.mean(maes),
-                        "RMSE": np.mean(rmses),
-                        "R2": np.mean(r2s)
-                    })
+    #             if maes:
+    #                 results.append({
+    #                     "Feature": target,
+    #                     "MAE": np.mean(maes),
+    #                     "RMSE": np.mean(rmses),
+    #                     "R2": np.mean(r2s)
+    #                 })
 
-            eval_df = pd.DataFrame(results)
-            # print("\n📊 XGBoost Evaluation Results:")
-            # print(eval_df)
-            return eval_df
+    #         eval_df = pd.DataFrame(results)
+    #         # print("\n📊 XGBoost Evaluation Results:")
+    #         # print(eval_df)
+    #         return eval_df
         
     def evaluate(self, df, col, mask_frac=0.2, n_runs=3):
         results = []

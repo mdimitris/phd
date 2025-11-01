@@ -14,15 +14,33 @@ import xgBoostFill as xg
 from LSTMImputer import LSTMImputer
 import helpers as help
 import bloodImpute as bloodImp
-
+from pathlib import Path
 
 blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
 gases_columns = ['paco2', 'fio2', 'pao2']
 glucCreat_columns = ["creatinine","glucose"]
 # ------------24 hours-------------#
 # vitals_dir="filled/vitals_filled.parquet/"
-vitals_dir="/root/scripts/newapp/secondrun/vitals_filled.parquet/"
+#vitals_dir="/root/scripts/newapp/secondrun/vitals_filled.parquet/"
 
+while True:
+    environment = input("Please choose environment, 1: Windows  2: Linux: ")
+
+    if environment == "1":
+        print("Windows platform chosen as environment")
+        begin_dir = Path("C:/phd-final/phd/newapp")
+
+        break
+    elif environment == "2":
+        print("Linux platform chosen as environment")
+        begin_dir =Path('/root/scripts/newapp/')
+        break
+    else:
+        print("Wrong value for environment, please try again.")
+
+vitals_dir = begin_dir/'secondrun/vitals_filled.parquet'
+
+time_interval = 15
 vitals_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 dtypes = {
         "label_sepsis_within_6h": "Int8",
@@ -44,24 +62,57 @@ if os.listdir(vitals_dir) == []:
 
     rows = 100000
 
-        df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-
-        time_interval=15 
-        # 2. Create the imputer object 
-        imputer = vi.vitalsImputeNew(df_vitals,checking_columns,time_interval) 
-        # 3. Prepare and impute the data
-        clean_df = imputer.prepareVitals()
+    # df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+    ddf_vitals = dd.read_csv(
+        #"/root/scripts/newapp/vitalsDemo.csv", #use for testing purposes
+        "/root/scripts/new_data/24hours/vitals_24_hours_final.csv",
+        dtype=dtypes,
+        sep="|",
+    )
+    
+    # 2. Create the imputer object
+    imputer = vi.vitalsImputeNew(ddf_vitals, vitals_columns, time_interval)
+    # 3. Prepare and impute the data
+    imputer.prepareVitals()
+    
+print('read parquet for evaluation')    
+#ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/vitals_filled.parquet/')
+ddf_vitals_filled = dd.read_parquet(begin_dir/'filled/vitals_filled.parquet')        
+cleaned_ddf = InputData.clean_dtypes(ddf_vitals_filled)
+df_sample = cleaned_ddf.sample(frac=0.8).compute() 
 
         # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
-        df_filled = dd.read_parquet("filled/vitals_filled.parquet")
-
+        # laterdf_filled = dd.read_parquet("filled/vitals_filled.parquet")
+    
         # Step 3: Run evaluation
-        vitals_evaluator = ev.evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
-        evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
-        print(evaluation_results)
+imputer = vi.vitalsImputeNew(df_sample, vitals_columns, time_interval)
 
-merged_dir='/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/'
-# merged_dir='unfilled/all_merged.parquet/'
+vitals_evaluator = ev.Evaluation(
+    imputer, df_sample, columns_to_fill=vitals_columns, mask_rate=0.2, n_runs=3
+)
+
+results = []
+
+    
+for col in vitals_columns:
+    print(f"Evaluating {col}...") 
+    res = vitals_evaluator.evaluate_masking(df_sample, col, mask_frac=0.2)
+    results.append(res)
+
+df_results = pd.DataFrame(results)
+print("\n📊 Vitals Evaluation Results:")
+print(df_results)
+
+
+
+from PlotEvaluation import PlotEvaluation  # if you save it as evaluator.py
+evaluator = PlotEvaluation(df_results)
+evaluator.run_all()
+
+exit()
+#merged_dir='/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/'
+merged_dir = begin_dir/'secondrun/unfilled/all_merged.parquet'
+
 if os.listdir(merged_dir) == []:    
 
         #ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
@@ -82,45 +133,49 @@ print('read merged parquet (still not completely filled)')
 merged_ddf = dd.read_parquet(merged_dir)
 print('dtype is:',merged_ddf.dtypes["stay_id"])
 
-
-# Diagnostics
-#df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-df_vitals = dd.read_csv("/root/scripts/new_data/24hours/vitals_24_hours_final.csv",sep='|', dtype=dtypes)
-print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
-print ("Rows before starting procedures:",df_vitals.shape[0].compute())
-print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
-print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
-print('Rows after merging:',merged_ddf.shape[0].compute())
-
-rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
-print(f"Number of rows with empty cells: {rows_with_missing}")
-print("Calculate missing values per column")
-help.calculateMissing(merged_ddf)
-
-print('start LightGBM for temperature')
-
-feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure",
+temperature_feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure",
                 "spo2", "fio2", "glucose", "wbc", "creatinine"]
-
-
-# 1️⃣ Sample small fraction for training
-sample_df = merged_ddf.sample(frac=0.8).compute()  
 
 # 2️⃣ Initialize and fit the imputer
 temperature_imputer = xg.xgBoostFill(
     target_columns=["temperature", "spo2"],
-    features=feature_cols,
+    features=temperature_feature_cols,
     short_gap_targets=["temperature"]
 )
 
-temperature_imputer.fit(sample_df)  # ⚡ fit on pandas
+if os.listdir('/root/scripts/newapp/secondrun/filled/temperature_parquet/') == []:   
+    # Diagnostics
+    #df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+    df_vitals = dd.read_csv("/root/scripts/new_data/24hours/vitals_24_hours_final.csv",sep='|', dtype=dtypes)
+    print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
+    print ("Rows before starting procedures:",df_vitals.shape[0].compute())
+    print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
+    print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
+    print('Rows after merging:',merged_ddf.shape[0].compute())
 
-# 3️⃣ Apply to full Dask DataFrame
-filled_ddf = temperature_imputer.transform(merged_ddf)
-filled_ddf.to_parquet("/root/scripts/newapp/secondrun/filled/temp_parquet/")
+    rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
+    print(f"Number of rows with empty cells: {rows_with_missing}")
+    print("Calculate missing values per column")
+    help.calculateMissing(merged_ddf)
+
+    print('start LightGBM for temperature')
+
+    # 1️⃣ Sample small fraction for training
+    sample_df = merged_ddf.sample(frac=0.3).compute()
+    temperature_imputer.fit(sample_df)  # ⚡ fit on pandas
+
+    # 3️⃣ Apply to full Dask DataFrame
+    filled_ddf = temperature_imputer.transform(merged_ddf)
+    filled_ddf.to_parquet("/root/scripts/newapp/secondrun/filled/temperature_parquet/")
+
+
+#read parquets with temperature filled and apply Evaluation
+print('begin temperature evaluation by reading the saved parquets')
+#ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/filled/temperature_parquet/')
+ddf_vitals_filled = dd.read_parquet(r'C:\phd-final\phd\newapp\filled\temperature_filled.parquet')
 
 # 4️⃣ Evaluation
-df_sample_eval = filled_ddf.sample(frac=0.8).compute()  # pandas for evaluation
+df_sample_eval = ddf_vitals_filled.sample(frac=0.80).compute()  # pandas for evaluation
 
 evaluator = ev.Evaluation(
     imputer=temperature_imputer,

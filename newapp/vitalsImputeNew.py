@@ -180,14 +180,14 @@ class vitalsImputeNew:
         self.interpolate_and_fill()
 
         # Reload filled dataset (as Dask for consistency)
-        #df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+
         df_filled = dd.read_parquet("/root/scripts/newapp/secondrun/vitals_filled.parquet/")
 
-        #run it for filling temperature more aggressively
-        df_filled = df_filled.map_partitions(
-            vitalsImputeNew.fill_temperature_continuous,
-            meta=df_filled._meta
-        ).persist()
+        # #run it for filling temperature more aggressively
+        # df_filled = df_filled.map_partitions(
+        #     vitalsImputeNew.fill_temperature_continuous,
+        #     meta=df_filled._meta
+        # ).persist()
         
         # # 3. XGBoost refinement for temperature (optional)
         # if run_xgb:

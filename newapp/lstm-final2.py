@@ -79,7 +79,7 @@ print('read parquet for evaluation')
 #ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/vitals_filled.parquet/')
 ddf_vitals_filled = dd.read_parquet(begin_dir/'filled/vitals_filled.parquet')        
 cleaned_ddf = InputData.clean_dtypes(ddf_vitals_filled)
-df_sample = cleaned_ddf.sample(frac=0.8).compute() 
+df_sample = cleaned_ddf.sample(frac=0.4).compute() 
 
         # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
         # laterdf_filled = dd.read_parquet("filled/vitals_filled.parquet")

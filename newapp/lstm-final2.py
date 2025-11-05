@@ -38,6 +38,7 @@ while True:
     else:
         print("Wrong value for environment, please try again.")
 
+
 vitals_dir = begin_dir/'secondrun/vitals_filled.parquet'
 
 time_interval = 15
@@ -75,41 +76,40 @@ if os.listdir(vitals_dir) == []:
     # 3. Prepare and impute the data
     imputer.prepareVitals()
     
-print('read parquet for evaluation')    
-#ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/vitals_filled.parquet/')
-ddf_vitals_filled = dd.read_parquet(begin_dir/'filled/vitals_filled.parquet')        
-cleaned_ddf = InputData.clean_dtypes(ddf_vitals_filled)
-df_sample = cleaned_ddf.sample(frac=0.8).compute() 
-
-        # Step 2: Reload from saved CSVs (so evaluation runs on same data you persisted)
-        # laterdf_filled = dd.read_parquet("filled/vitals_filled.parquet")
-    
-        # Step 3: Run evaluation
-imputer = vi.vitalsImputeNew(df_sample, vitals_columns, time_interval)
-
-vitals_evaluator = ev.Evaluation(
-    imputer, df_sample, columns_to_fill=vitals_columns, mask_rate=0.2, n_runs=3
-)
-
-results = []
+    print('read filled parquets for vitals evaluation (no temperature)')    
+    print ('read filled vitals from:',vitals_dir)
+    #ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/vitals_filled.parquet/')
+    ddf_vitals_filled = dd.read_parquet(vitals_dir)        
+    cleaned_ddf = InputData.clean_dtypes(ddf_vitals_filled)
+    df_sample = cleaned_ddf.sample(frac=0.3).compute() 
 
     
-for col in vitals_columns:
-    print(f"Evaluating {col}...") 
-    res = vitals_evaluator.evaluate_masking(df_sample, col, mask_frac=0.2)
-    results.append(res)
+    # Step 3: Run evaluation
+    imputer = vi.vitalsImputeNew(df_sample, vitals_columns, time_interval)
 
-df_results = pd.DataFrame(results)
-print("\n📊 Vitals Evaluation Results:")
-print(df_results)
+    vitals_evaluator = ev.Evaluation(
+        imputer, df_sample, columns_to_fill=vitals_columns, mask_rate=0.2, n_runs=3
+    )
+
+    results = []
+
+        
+    for col in vitals_columns:
+        print(f"Evaluating {col}...") 
+        res = vitals_evaluator.evaluate_masking(df_sample, col, mask_frac=0.2)
+        results.append(res)
+
+    df_results = pd.DataFrame(results)
+    print("\n📊 Vitals Evaluation Results:")
+    print(df_results)
 
 
 
-from PlotEvaluation import PlotEvaluation  # if you save it as evaluator.py
-evaluator = PlotEvaluation(df_results)
-evaluator.run_all()
+    from PlotEvaluation import PlotEvaluation  # if you save it as evaluator.py
+    evaluator = PlotEvaluation(df_results)
+    evaluator.run_all()
 
-exit()
+    
 #merged_dir='/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/'
 merged_dir = begin_dir/'secondrun/unfilled/all_merged.parquet'
 
@@ -129,7 +129,7 @@ if os.listdir(merged_dir) == []:
         print(ddf_vitals.info())
         df_merged_data = InputData.mergeDataframes()
 
-print('read merged parquet (still not completely filled)')
+print('read merged parquet (still with temperature not filled)')
 merged_ddf = dd.read_parquet(merged_dir)
 print('dtype is:',merged_ddf.dtypes["stay_id"])
 
@@ -138,7 +138,7 @@ temperature_feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pul
 
 # 2️⃣ Initialize and fit the imputer
 temperature_imputer = xg.xgBoostFill(
-    target_columns=["temperature", "spo2"],
+    target_columns=["temperature"],
     features=temperature_feature_cols,
     short_gap_targets=["temperature"]
 )

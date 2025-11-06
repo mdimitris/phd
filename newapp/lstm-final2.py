@@ -114,27 +114,27 @@ if os.listdir(vitals_dir) == []:
 merged_dir = begin_dir/'secondrun/unfilled/all_merged.parquet'
 
 if os.listdir(merged_dir) == []:    
+        print('create parquets from csv files')
+        # #ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
+        # ddf_bloodResults = dd.read_csv("/root/scripts/new_data/24hours/blood_24_hours.csv", sep='|')
+        # help.prepareDataset(ddf_bloodResults,blood_columns,["rdwsd","admittime"],'blood')
 
-        #ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
-        ddf_bloodResults = dd.read_csv("/root/scripts/new_data/24hours/blood_24_hours.csv", sep='|')
-        help.prepareDataset(ddf_bloodResults,blood_columns,["rdwsd","admittime"],'blood')
+        # ddf_gases = dd.read_csv("/root/scripts/new_data/24hours/gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
+        # help.prepareDataset(ddf_gases,gases_columns,["hadm_id","sofa_time"],'gases')    
 
-        ddf_gases = dd.read_csv("/root/scripts/new_data/24hours/gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
-        help.prepareDataset(ddf_gases,gases_columns,["hadm_id","sofa_time"],'gases')    
+        # ddf_glucoCreat = dd.read_csv("/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
+        # help.prepareDataset(ddf_glucoCreat,glucCreat_columns,["hadm_id"],'glucCreat')
 
-        ddf_glucoCreat = dd.read_csv("/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
-        help.prepareDataset(ddf_glucoCreat,glucCreat_columns,["hadm_id"],'glucCreat')
-
-        ddf_vitals = dd.read_parquet("/root/scripts/newapp/secondrun/vitals_filled.parquet/")
-        print(ddf_vitals.info())
-        df_merged_data = InputData.mergeDataframes()
+ddf_vitals = dd.read_parquet(begin_dir/"secondrun/vitals_filled.parquet/")
+print(ddf_vitals.info())
+df_merged_data = InputData.mergeDataframes(begin_dir)
 
 print('read merged parquet (still with temperature not filled)')
 merged_ddf = dd.read_parquet(merged_dir)
 print('dtype is:',merged_ddf.dtypes["stay_id"])
 
 temperature_feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure",
-                "spo2", "fio2", "glucose", "wbc", "creatinine"]
+                "spo2", "fio2", "glucose", "wbc", "creatinine",'hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
 
 # 2️⃣ Initialize and fit the imputer
 temperature_imputer = xg.xgBoostFill(
@@ -143,10 +143,10 @@ temperature_imputer = xg.xgBoostFill(
     short_gap_targets=["temperature"]
 )
 
-if os.listdir('/root/scripts/newapp/secondrun/filled/temperature_parquet/') == []:   
+if os.listdir(begin_dir/'secondrun/filled/temperature_parquet/') == []:   
     # Diagnostics
-    #df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-    df_vitals = dd.read_csv("/root/scripts/new_data/24hours/vitals_24_hours_final.csv",sep='|', dtype=dtypes)
+    df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
+    #df_vitals = dd.read_csv("/root/scripts/new_data/24hours/vitals_24_hours_final.csv",sep='|', dtype=dtypes)
     print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
     print ("Rows before starting procedures:",df_vitals.shape[0].compute())
     print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
@@ -161,21 +161,20 @@ if os.listdir('/root/scripts/newapp/secondrun/filled/temperature_parquet/') == [
     print('start LightGBM for temperature')
 
     # 1️⃣ Sample small fraction for training
-    sample_df = merged_ddf.sample(frac=0.3).compute()
+    sample_df = merged_ddf.sample(frac=0.5).compute()
     temperature_imputer.fit(sample_df)  # ⚡ fit on pandas
 
     # 3️⃣ Apply to full Dask DataFrame
     filled_ddf = temperature_imputer.transform(merged_ddf)
-    filled_ddf.to_parquet("/root/scripts/newapp/secondrun/filled/temperature_parquet/")
-
+    filled_ddf.to_parquet(begin_dir/"secondrun/filled/temperature_parquet/")
 
 #read parquets with temperature filled and apply Evaluation
 print('begin temperature evaluation by reading the saved parquets')
 #ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/filled/temperature_parquet/')
-ddf_vitals_filled = dd.read_parquet(r'C:\phd-final\phd\newapp\filled\temperature_filled.parquet')
+ddf_vitals_filled = dd.read_parquet(begin_dir/'filled/temperature_filled.parquet')
 
 # 4️⃣ Evaluation
-df_sample_eval = ddf_vitals_filled.sample(frac=0.80).compute()  # pandas for evaluation
+df_sample_eval = ddf_vitals_filled.sample(frac=0.8).compute()  # pandas for evaluation
 
 evaluator = ev.Evaluation(
     imputer=temperature_imputer,

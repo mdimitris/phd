@@ -2,7 +2,7 @@ import pandas as pd
 import dask.dataframe as dd
 import duckdb
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-
+from pathlib import Path
 
 def clean_dtypes(df):
         df = df.copy()
@@ -133,23 +133,29 @@ def evaluate_imputation(self, df, col, sample_idx):
 
 
 
-def mergeDataframes():
+def mergeDataframes (begin_dir):
 
     print('start merging the parquet files')
+
+    vitals_path=str(begin_dir/"secondrun/vitals_filled.parquet/*.parquet")
+    blood_path=str(begin_dir/"secondrun/unfilled/blood.parquet/*.parquet")
+    gases_path=str(begin_dir/"secondrun/unfilled/gases.parquet/*.parquet")
+    gluc_path=str(begin_dir/"secondrun/unfilled/glucCreat.parquet/*.parquet")
+    output_path=str(begin_dir/"secondrun/unfilled/all_merged.parquet/")
 
     # Connect (in-memory or persistent)
     con = duckdb.connect()
 
     # Optional: control parallelism (number of threads)
-    con.execute("SET threads = 16;")
+    con.execute("SET threads = 6;")
 
     # 1️⃣ Run the chained ASOF joins
-    con.execute("""
+    con.execute(f"""
     CREATE OR REPLACE TABLE all_merged AS
     WITH vitals_blood AS (
         SELECT *           
-        FROM read_parquet('/root/scripts/newapp/secondrun/vitals_filled.parquet/*.parquet') AS vitals
-        ASOF LEFT JOIN read_parquet('/root/scripts/newapp/secondrun/unfilled/blood.parquet/*.parquet') AS blood
+        FROM read_parquet('{vitals_path}') AS vitals
+        ASOF LEFT JOIN read_parquet('{blood_path}') AS blood
         ON vitals.stay_id = blood.stay_id
         AND CAST(vitals.charttime AS TIMESTAMP) >= CAST(blood.charttime AS TIMESTAMP)
         AND CAST(vitals.charttime AS TIMESTAMP) - CAST(blood.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -158,7 +164,7 @@ def mergeDataframes():
     vitals_blood_gases AS (
         SELECT *
         FROM vitals_blood AS vb
-        ASOF LEFT JOIN read_parquet('/root/scripts/newapp/secondrun/unfilled/gases.parquet/*.parquet') AS gases
+        ASOF LEFT JOIN read_parquet('{gases_path}') AS gases
         ON vb.stay_id = gases.stay_id
         AND CAST(vb.charttime AS TIMESTAMP) >= CAST(gases.charttime AS TIMESTAMP)
         AND CAST(vb.charttime AS TIMESTAMP) - CAST(gases.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -167,7 +173,7 @@ def mergeDataframes():
     final_merge AS (
         SELECT *
         FROM vitals_blood_gases AS vbg
-        ASOF LEFT JOIN read_parquet('/root/scripts/newapp/secondrun/unfilled/glucCreat.parquet/*.parquet') AS gluc
+        ASOF LEFT JOIN read_parquet('{gluc_path}') AS gluc
         ON vbg.stay_id = gluc.stay_id
         AND CAST(vbg.charttime AS TIMESTAMP) >= CAST(gluc.charttime AS TIMESTAMP)
         AND CAST(vbg.charttime AS TIMESTAMP) - CAST(gluc.charttime AS TIMESTAMP) <= INTERVAL '24 hour'
@@ -203,9 +209,9 @@ def mergeDataframes():
 
     # 5️⃣ Write cleaned and bucketed Parquet dataset
     con.register("cleaned_data", df_merged_data)
-    con.execute("""
+    con.execute(f"""
         COPY cleaned_data
-        TO '/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/'
+        TO '{output_path}'
         (FORMAT PARQUET, PARTITION_BY (bucket), OVERWRITE TRUE);
     """)
 
@@ -213,7 +219,7 @@ def mergeDataframes():
     print("Each stay_id is fully contained within a single bucket and unwanted columns are removed.")
 
     # 6️⃣ Return as Dask DataFrame for further processing
-    all_merged = dd.read_parquet("/root/scripts/newapp/secondrun/unfilled/all_merged.parquet/")
+    all_merged = dd.read_parquet(output_path)
     return all_merged
 
 

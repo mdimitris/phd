@@ -32,3 +32,17 @@ def calculateMissing(ddf):
     # Display sorted results (highest missing first)
     missing_percentage = missing_percentage.sort_values(ascending=False)
     print(missing_percentage)
+
+
+def diagnostics(merged_ddf,df):
+   
+    print ("Patients before starting procedures:",len(pd.unique(df['subject_id'])))
+    print ("Rows before starting procedures:",df.shape[0].compute())
+    print("Unique patients before merging but after vitalsimputeNew:", df['subject_id'].nunique().compute())
+    print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
+    print('Rows after merging:',merged_ddf.shape[0].compute())
+
+    rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
+    # print(f"Number of rows with empty cells: {rows_with_missing}")
+    # print("Calculate missing values per column")
+    calculateMissing(merged_ddf)

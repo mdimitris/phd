@@ -127,65 +127,92 @@ if os.listdir(merged_dir) == []:
 
 ddf_vitals = dd.read_parquet(begin_dir/"secondrun/vitals_filled.parquet/")
 print(ddf_vitals.info())
-df_merged_data = InputData.mergeDataframes(begin_dir)
+InputData.mergeDataframes(begin_dir)
 
-print('read merged parquet (still with temperature not filled)')
+
+
+# print('read merged parquet (still with temperature not filled)')
 merged_ddf = dd.read_parquet(merged_dir)
-print('dtype is:',merged_ddf.dtypes["stay_id"])
 
-temperature_feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure",
-                "spo2", "fio2", "glucose", "wbc", "creatinine",'hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+# #temperature_feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure","spo2", "fio2", "glucose", "wbc", "creatinine",'hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+# temperature_feature_cols = ["heart_rate", "resp_rate", "sbp", "dbp", "mbp", "pulse_pressure","spo2"]
+# # 2️⃣ Initialize and fit the imputer
+# temperature_imputer = xg.xgBoostFill(
+#     target_columns=["temperature"],
+#     features=temperature_feature_cols,
+#     short_gap_targets=["temperature"]
+# )
 
-# 2️⃣ Initialize and fit the imputer
-temperature_imputer = xg.xgBoostFill(
-    target_columns=["temperature"],
-    features=temperature_feature_cols,
-    short_gap_targets=["temperature"]
-)
+temperature_folder = begin_dir/'secondrun/filled/temperature_filled.parquet/'
 
-if os.listdir(begin_dir/'secondrun/filled/temperature_parquet/') == []:   
+if os.listdir(temperature_folder) == []:   
     # Diagnostics
     df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-    #df_vitals = dd.read_csv("/root/scripts/new_data/24hours/vitals_24_hours_final.csv",sep='|', dtype=dtypes)
-    print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
-    print ("Rows before starting procedures:",df_vitals.shape[0].compute())
-    print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
-    print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
-    print('Rows after merging:',merged_ddf.shape[0].compute())
+    help.diagnostics(merged_ddf,df_vitals)
 
-    rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
-    print(f"Number of rows with empty cells: {rows_with_missing}")
-    print("Calculate missing values per column")
-    help.calculateMissing(merged_ddf)
+    
+    temperature_imputer = vi.vitalsImputeNew(merged_ddf,['temperature'], 7)
+
+    # Fill temperature and save result
+    filled_ddf = temperature_imputer.fill_temperature_continuous(
+        parquet_path=merged_dir,
+        output_path=temperature_folder
+    )
+
+    # Sample for evaluation
+    df_sample_eval = filled_ddf.sample(frac=0.2, random_state=42).compute()
+
+    # Create the evaluator
+    evaluator = ev.Evaluation(
+        imputer=temperature_imputer,                 # our ffill/bfill imputer
+        data=df_sample_eval,
+        columns_to_fill=["temperature"], # what we evaluate
+        mask_rate=0.2,                   # % of values to mask artificially
+        n_runs=3                         # repeat 3 times for robustness
+    )
+
+    # Run evaluation for temperature
+    results = []
+    for col in ["temperature"]:
+        print(f"Evaluating {col}...")
+        res = evaluator.evaluate_masking(df_sample_eval, col, mask_frac=0.2)
+        results.append(res)
+
+    df_results = pd.DataFrame(results)
+    print(df_results)
+
+    exit()
 
     print('start LightGBM for temperature')
 
-    # 1️⃣ Sample small fraction for training
-    sample_df = merged_ddf.sample(frac=0.5).compute()
-    temperature_imputer.fit(sample_df)  # ⚡ fit on pandas
+    # Fit on a clean, representative sample
+    sample_df = merged_ddf.dropna(subset=temperature_feature_cols).sample(frac=0.8, random_state=42).compute()
+    sample_df = temperature_imputer.short_gap_fill(sample_df, "temperature", limit=4)
+    temperature_imputer.transform(sample_df)
 
-    # 3️⃣ Apply to full Dask DataFrame
+    # Transform the full dataset
     filled_ddf = temperature_imputer.transform(merged_ddf)
-    filled_ddf.to_parquet(begin_dir/"secondrun/filled/temperature_parquet/")
+    filled_ddf.to_parquet(temperature_folder)
+    print(f"Saved filled data to: {temperature_folder}")
 
 #read parquets with temperature filled and apply Evaluation
 print('begin temperature evaluation by reading the saved parquets')
 #ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/filled/temperature_parquet/')
-ddf_vitals_filled = dd.read_parquet(begin_dir/'filled/temperature_filled.parquet')
+ddf_vitals_filled = dd.read_parquet(temperature_folder)
 
 # 4️⃣ Evaluation
-df_sample_eval = ddf_vitals_filled.sample(frac=0.8).compute()  # pandas for evaluation
+df_sample_eval = ddf_vitals_filled.sample(frac=0.8,random_state=42).compute()  # pandas for evaluation
 
 evaluator = ev.Evaluation(
     imputer=temperature_imputer,
     data=df_sample_eval,
-    columns_to_fill=["temperature","spo2"],
+    columns_to_fill=["temperature"],
     mask_rate=0.2,
     n_runs=3
 )
 
 results = []
-for col in ["temperature","spo2"]:
+for col in ["temperature"]:
     print(f"Evaluating {col}...") 
     res = evaluator.evaluate_masking(df_sample_eval, col, mask_frac=0.2)
     results.append(res)
@@ -194,7 +221,8 @@ df_results = pd.DataFrame(results)
 print("\n📊 Temperature & SpO₂ Imputation Evaluation Results:")
 print(df_results)
 
-
+desc = df_sample_eval['temperature'].describe()
+print(desc)
 # temperature_evaluator = ev.Evaluation(
 #         temperature_imputer, merged_ddf, columns_to_fill=['temperature'], mask_rate=0.5, n_runs=3
 #     )
@@ -206,6 +234,8 @@ print(df_results)
 #     res = temperature_imputer.evaluate_masking(df_sample, col, mask_frac=0.2)
 #     results.append(res)
 exit()
+
+
 df_results = pd.DataFrame(results)
 print("\n📊 Blood Imputation Evaluation Results:")
 print(df_results)

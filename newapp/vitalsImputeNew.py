@@ -267,22 +267,68 @@ class vitalsImputeNew:
             return df_filled.compute()
         return df_filled
     
+
+    def fill_temperature_continuous(self, parquet_path, output_path=None):
+            """
+            Forward-fill and backward-fill temperature per stay_id and per time interval.
+
+            Parameters
+            ----------
+            parquet_path : str or Path
+                Path to input parquet files.
+            output_path : str or Path, optional
+                Path to save the filled parquet. If None, doesn't save.
+
+            Returns
+            -------
+            dd.DataFrame
+                Dask DataFrame with 'temperature' filled.
+            """
+            # Read parquet
+            ddf = dd.read_parquet(parquet_path)
+            ddf['charttime'] = dd.to_datetime(ddf['charttime'])
+
+            # Sort within partitions
+            ddf = ddf.map_partitions(lambda df: df.sort_values(['stay_id', 'charttime']))
+
+            # Partition-wise fill
+            def _fill_partition(pdf):
+                pdf = pdf.copy()
+                # Create interval groups per stay
+                pdf['time_group'] = (
+                    pdf.groupby('stay_id')['charttime']
+                    .transform(lambda x: ((x - x.min()).dt.total_seconds() // (self.interval*3600)).astype(int))
+                )
+                # Forward/backward fill per group
+                pdf['temperature'] = pdf.groupby(['stay_id', 'time_group'])['temperature'] \
+                                        .transform(lambda g: g.ffill().bfill().interpolate(method="linear", limit_direction="both"))
+                pdf.drop(columns=['time_group'], inplace=True)
+                return pdf
+
+            filled_ddf = ddf.map_partitions(_fill_partition, meta=ddf._meta)
+
+            # Save to parquet if requested
+            if output_path is not None:
+                filled_ddf.to_parquet(output_path)
+
+            return filled_ddf
     
-    @staticmethod
-    def fill_temperature_continuous(df):
-        """
-        Forward-fill and backward-fill temperature per stay_id to ensure continuity.
-        Dask-compatible via transform to avoid index mismatch.
-        """
-        print('start filling temperature again')
-        df = df.copy()
-        df['charttime'] = pd.to_datetime(df['charttime'])
-        df = df.sort_values(['stay_id', 'charttime'])
+    
+    # @staticmethod
+    # def fill_temperature_continuous(self,df):
+    #     """
+    #     Forward-fill and backward-fill temperature per stay_id to ensure continuity.
+    #     Dask-compatible via transform to avoid index mismatch.
+    #     """
+    #     print('start filling temperature again')
+    #     df = df.copy()
+    #     df['charttime'] = pd.to_datetime(df['charttime'])
+    #     df = df.sort_values(['stay_id', 'charttime'])
 
-        # Dask-safe transform (keeps index)
-        df['temperature'] = df.groupby('stay_id')['temperature'].transform(lambda g: g.ffill().bfill())
+    #     # Dask-safe transform (keeps index)
+    #     df['temperature'] = df.groupby('stay_id')['temperature'].transform(lambda g: g.ffill().bfill())
 
-        return df
+    #     return df
 
     # @staticmethod
     # def xgboost_temperature_refine(df):

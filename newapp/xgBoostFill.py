@@ -61,6 +61,13 @@ class xgBoostFill:
                 random_state=self.random_state,
                 n_jobs=-1
             )
+            # model = xgb.XGBRegressor(
+            #     n_estimators=500,
+            #     learning_rate=0.01,
+            #     max_depth=6,
+            #     random_state=self.random_state,
+            #     n_jobs=-1
+            # )
             model.fit(X_train, y_train)
             self.models[target] = (model, features)
         return self

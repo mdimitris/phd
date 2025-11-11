@@ -114,7 +114,7 @@ if os.listdir(vitals_dir) == []:
 merged_dir = begin_dir/'secondrun/unfilled/all_merged.parquet'
 
 if os.listdir(merged_dir) == []:    
-        print('create parquets from csv files')
+    print('create parquets from csv files')
         # #ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
         # ddf_bloodResults = dd.read_csv("/root/scripts/new_data/24hours/blood_24_hours.csv", sep='|')
         # help.prepareDataset(ddf_bloodResults,blood_columns,["rdwsd","admittime"],'blood')
@@ -125,9 +125,9 @@ if os.listdir(merged_dir) == []:
         # ddf_glucoCreat = dd.read_csv("/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
         # help.prepareDataset(ddf_glucoCreat,glucCreat_columns,["hadm_id"],'glucCreat')
 
-ddf_vitals = dd.read_parquet(begin_dir/"secondrun/vitals_filled.parquet/")
-print(ddf_vitals.info())
-InputData.mergeDataframes(begin_dir)
+    ddf_vitals = dd.read_parquet(begin_dir/"secondrun/vitals_filled.parquet/")
+    print(ddf_vitals.info())
+    InputData.mergeDataframes(begin_dir)
 
 
 
@@ -181,82 +181,86 @@ if os.listdir(temperature_folder) == []:
     df_results = pd.DataFrame(results)
     print(df_results)
 
-    exit()
+   
 
-    print('start LightGBM for temperature')
+#     print('start LightGBM for temperature')
 
-    # Fit on a clean, representative sample
-    sample_df = merged_ddf.dropna(subset=temperature_feature_cols).sample(frac=0.8, random_state=42).compute()
-    sample_df = temperature_imputer.short_gap_fill(sample_df, "temperature", limit=4)
-    temperature_imputer.transform(sample_df)
+#     # Fit on a clean, representative sample
+#     sample_df = merged_ddf.dropna(subset=temperature_feature_cols).sample(frac=0.8, random_state=42).compute()
+#     sample_df = temperature_imputer.short_gap_fill(sample_df, "temperature", limit=4)
+#     temperature_imputer.transform(sample_df)
 
-    # Transform the full dataset
-    filled_ddf = temperature_imputer.transform(merged_ddf)
-    filled_ddf.to_parquet(temperature_folder)
-    print(f"Saved filled data to: {temperature_folder}")
+#     # Transform the full dataset
+#     filled_ddf = temperature_imputer.transform(merged_ddf)
+#     filled_ddf.to_parquet(temperature_folder)
+#     print(f"Saved filled data to: {temperature_folder}")
 
-#read parquets with temperature filled and apply Evaluation
-print('begin temperature evaluation by reading the saved parquets')
-#ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/filled/temperature_parquet/')
-ddf_vitals_filled = dd.read_parquet(temperature_folder)
+# #read parquets with temperature filled and apply Evaluation
+# print('begin temperature evaluation by reading the saved parquets')
+# #ddf_vitals_filled = dd.read_parquet('/root/scripts/newapp/secondrun/filled/temperature_parquet/')
+# ddf_vitals_filled = dd.read_parquet(temperature_folder)
 
-# 4️⃣ Evaluation
-df_sample_eval = ddf_vitals_filled.sample(frac=0.8,random_state=42).compute()  # pandas for evaluation
+# # 4️⃣ Evaluation
+# df_sample_eval = ddf_vitals_filled.sample(frac=0.8,random_state=42).compute()  # pandas for evaluation
 
-evaluator = ev.Evaluation(
-    imputer=temperature_imputer,
-    data=df_sample_eval,
-    columns_to_fill=["temperature"],
-    mask_rate=0.2,
-    n_runs=3
-)
+# evaluator = ev.Evaluation(
+#     imputer=temperature_imputer,
+#     data=df_sample_eval,
+#     columns_to_fill=["temperature"],
+#     mask_rate=0.2,
+#     n_runs=3
+# )
 
-results = []
-for col in ["temperature"]:
-    print(f"Evaluating {col}...") 
-    res = evaluator.evaluate_masking(df_sample_eval, col, mask_frac=0.2)
-    results.append(res)
-
-df_results = pd.DataFrame(results)
-print("\n📊 Temperature & SpO₂ Imputation Evaluation Results:")
-print(df_results)
-
-desc = df_sample_eval['temperature'].describe()
-print(desc)
-# temperature_evaluator = ev.Evaluation(
-#         temperature_imputer, merged_ddf, columns_to_fill=['temperature'], mask_rate=0.5, n_runs=3
-#     )
-# cleaned_ddf = InputData.clean_dtypes(merged_ddf)
-# df_sample = cleaned_ddf.sample(frac=0.4).compute() 
 # results = []
-# for col in ['temperature']:
+# for col in ["temperature"]:
 #     print(f"Evaluating {col}...") 
-#     res = temperature_imputer.evaluate_masking(df_sample, col, mask_frac=0.2)
+#     res = evaluator.evaluate_masking(df_sample_eval, col, mask_frac=0.2)
 #     results.append(res)
-exit()
+
+# df_results = pd.DataFrame(results)
+# print("\n📊 Temperature & SpO₂ Imputation Evaluation Results:")
+# print(df_results)
+
+# desc = df_sample_eval['temperature'].describe()
+# print(desc)
+# # temperature_evaluator = ev.Evaluation(
+# #         temperature_imputer, merged_ddf, columns_to_fill=['temperature'], mask_rate=0.5, n_runs=3
+# #     )
+# # cleaned_ddf = InputData.clean_dtypes(merged_ddf)
+# # df_sample = cleaned_ddf.sample(frac=0.4).compute() 
+# # results = []
+# # for col in ['temperature']:
+# #     print(f"Evaluating {col}...") 
+# #     res = temperature_imputer.evaluate_masking(df_sample, col, mask_frac=0.2)
+# #     results.append(res)
 
 
-df_results = pd.DataFrame(results)
-print("\n📊 Blood Imputation Evaluation Results:")
-print(df_results)
+#since I finished with vitals now read final parquets  in temperature filled for blood results filling
+blood_dir = begin_dir/'secondrun/filled/blood_filled.parquet'
 
-exit()
-blood_imputer = bloodImp.bloodImpute(
-    blood_ddf=merged_ddf,
-    blood_columns=blood_columns,
-    sample_size=250_000,  # for MICE training sample
-    output_folder="/root/scripts/newapp/filled/all_merged/blood.parquet/",  # folder
-    n_output_files=128  # save in 128 Parquets
-)
 
-blood_imputer.run()
+merged_filled_blood = dd.read_parquet(temperature_folder)
+
+if os.listdir(blood_dir) == []:   
+
+    print('start Blood filling in the vitals filled dataset')
+#Train for Blood MICE impute
+    blood_imputer = bloodImp.bloodImpute(
+        blood_ddf=merged_filled_blood,
+        blood_columns=blood_columns,
+        sample_size=250_000,  # for MICE training sample
+        output_folder=blood_dir,  # folder
+        n_output_files=128  # save in 128 Parquets
+    )
+
+    blood_imputer.run()
 
 
 # -----------------------------
 # 4. Load a sample for evaluation
 # -----------------------------
 # Pick one or a few Parquet batches for evaluation
-merged_filled_blood = dd.read_parquet("/root/scripts/newapp/filled/all_merged/blood.parquet/")
+merged_filled_blood = dd.read_parquet(blood_dir)
 print("Calculate missing values after blood filling")
 help.calculateMissing(merged_ddf)
 cleaned_ddf = InputData.clean_dtypes(merged_filled_blood)
@@ -287,14 +291,7 @@ print(df_results)
 
 
 exit()
-# df_vitals = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\vitals_24_hours_final.csv", sep='|', dtype=dtypes)
-# print ("Patients before starting procedures:",len(pd.unique(df_vitals['subject_id'])))
-# print("Unique patients before merging but after vitalsimputeNew:", df_vitals['subject_id'].nunique().compute())
-# print("Unique patients after merging all the sources:", merged_ddf['subject_id'].nunique().compute())
-# print('Rows after merging:',merged_ddf.shape[0].compute())
-# rows_with_missing=merged_ddf.isnull().any(axis=1).sum().compute()
 
-# print(f"Number of rows with empty cells: {rows_with_missing}")
 
 # Fill blood gases
 gases_columns = ['paco2', 'fio2', 'pao2']

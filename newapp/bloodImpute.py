@@ -85,13 +85,13 @@ class bloodImpute:
         if sample_df.isnull().sum().sum() == 0:
             print("⚠️ No missing values found — skipping MICE training.")
             return False
-        mean_match = schemes.mean_match_default
+        #mean_match = schemes.mean_match_default
         self.kds_global = mf.ImputationKernel(
             data=sample_df,
             save_all_iterations=False,
             random_state=42,
             data_subset=0.7,
-            mean_match_scheme=mean_match,
+            #mean_match_scheme=mean_match,
             # mean_match_candidates=5,
             datasets=1
         )

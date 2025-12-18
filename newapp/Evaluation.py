@@ -2,13 +2,14 @@ import numpy as np
 import vitalsImputeNew
 import gasesImpute as gi
 import dask.dataframe as dd
+import dask.array as da
 import pandas as pd
 import matplotlib.pyplot as plt
 #import seaborn as sns
 from sklearn.experimental import enable_iterative_imputer  # noqa
 from sklearn.impute import IterativeImputer
 from sklearn.linear_model import BayesianRidge
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, roc_auc_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, roc_auc_score,median_absolute_error
 import InputData
 import xgBoostFill as xgbFill
 import random
@@ -29,7 +30,7 @@ class Evaluation:
         "mchc", "mcv", "rbc", "rdw", "glucose", "creatinine"
     ]
 
-    def __init__(self, imputer, data, columns_to_fill, mask_rate,n_runs):
+    def __init__(self, imputer, data, columns_to_fill, mask_rate=0.2, n_runs=3):
         self.imputer = imputer
         self.data = data
         self.columns_to_fill = columns_to_fill
@@ -263,6 +264,7 @@ class Evaluation:
             df_copy.loc[mask_idx, col] = np.nan
 
         # --- Run imputer
+        
         df_filled = self.imputer.transform(df_copy)
 
         # --- Extract predictions for masked rows
@@ -286,6 +288,61 @@ class Evaluation:
         r2 = r2_score(true_vals_clean, preds_clean)
 
         return {"Feature": col, "MAE": mae, "RMSE": rmse, "R2": r2}
+    
+
+
+
+
+    def evaluate_sparse_with_ml(self, imputer, mask_frac=0.05, n_runs=3):
+        """
+        Evaluate sparse features using the ML imputer (XGBoost/LightGBM).
+        Returns MAE, MedianAE, and number of evaluated points per feature.
+        """
+        from sklearn.metrics import mean_absolute_error
+        import numpy as np
+        import pandas as pd
+
+        results = []
+
+        for col in self.columns_to_fill:
+            maes, medians, counts = [], [], []
+
+            for _ in range(n_runs):
+                df_eval = self.data.copy()
+                mask = df_eval[col].notna()
+                if mask.sum() == 0:
+                    continue
+                mask_idx = df_eval[mask].sample(frac=mask_frac, random_state=42).index
+                y_true = df_eval.loc[mask_idx, col].values
+                df_eval.loc[mask_idx, col] = np.nan
+
+                # Run ML imputer
+                if imputer is not None:
+                    df_filled = imputer.transform(df_eval)
+                else:
+                    df_filled = df_eval.copy()
+                    df_filled[col] = df_filled[col].ffill().bfill().interpolate()
+
+                y_pred = df_filled.loc[mask_idx, col].values
+
+                valid_mask = ~np.isnan(y_true) & ~np.isnan(y_pred)
+                if valid_mask.sum() == 0:
+                    continue
+
+                maes.append(mean_absolute_error(y_true[valid_mask], y_pred[valid_mask]))
+                medians.append(np.median(np.abs(y_true[valid_mask] - y_pred[valid_mask])))
+                counts.append(valid_mask.sum())
+
+            if maes:
+                results.append({
+                    "Feature": col,
+                    "MAE": np.mean(maes),
+                    "MedianAE": np.mean(medians),
+                    "EvaluatedPoints": np.sum(counts)
+                })
+
+        return pd.DataFrame(results)
+    
        
        
        

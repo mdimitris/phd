@@ -19,7 +19,7 @@ class bloodImpute:
         self.blood_columns = blood_columns
         self.sample_size = sample_size
         self.output_folder = output_folder
-        self.model_path = model_path or "/root/scripts/newapp/filled/models/global_blood_kernel.pkl"
+        self.model_path = model_path or "models/global_blood_kernel.pkl"
         self.kds_global = None
         self.n_output_files = n_output_files
 

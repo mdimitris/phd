@@ -8,6 +8,7 @@ from dask.distributed import Client
 import os
 import warnings
 
+
 # Suppress Dask performance warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning, module="dask")
 
@@ -17,7 +18,7 @@ class LSTMModel(nn.Module):
         super(LSTMModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.3)
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):

@@ -12,11 +12,15 @@ import pyarrow.parquet as pa
 import os
 import xgBoostFill as xg
 from LSTMImputer import LSTMImputer
+import SepsisTrainer  as lstm
 import helpers as help
 import bloodImpute as bloodImp
 from pathlib import Path
+from sklearn.model_selection import GroupKFold
+import time
 
-blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
+features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
+blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'rbc']
 gases_columns = ['paco2', 'fio2', 'pao2']
 glucCreat_columns = ["creatinine","glucose"]
 # ------------24 hours-------------#
@@ -244,11 +248,12 @@ merged_filled_blood = dd.read_parquet(temperature_folder)
 if os.listdir(blood_dir) == []:   
 
     print('start Blood filling in the vitals filled dataset')
+
 #Train for Blood MICE impute
     blood_imputer = bloodImp.bloodImpute(
         blood_ddf=merged_filled_blood,
         blood_columns=blood_columns,
-        sample_size=250_000,  # for MICE training sample
+        sample_size=250000,  # for MICE training sample
         output_folder=blood_dir,  # folder
         n_output_files=128  # save in 128 Parquets
     )
@@ -256,94 +261,395 @@ if os.listdir(blood_dir) == []:
     blood_imputer.run()
 
 
-# -----------------------------
-# 4. Load a sample for evaluation
-# -----------------------------
-# Pick one or a few Parquet batches for evaluation
-merged_filled_blood = dd.read_parquet(blood_dir)
-print("Calculate missing values after blood filling")
-help.calculateMissing(merged_ddf)
-cleaned_ddf = InputData.clean_dtypes(merged_filled_blood)
-df_sample = cleaned_ddf.sample(frac=0.4).compute() 
-# -----------------------------
-# 5. Create Evaluation instance
-# -----------------------------
-evaluator = ev.Evaluation(
-    imputer=blood_imputer,      # the filling object
-    data=df_sample,             # sample for evaluation
-    columns_to_fill=blood_columns,
-    mask_rate=0.2,              # fraction of observed values to mask
-    n_runs=3
-)
+    # -----------------------------
+    # 4. Load a sample for evaluation
+    # -----------------------------
+    # Pick one or a few Parquet batches for evaluation
+    merged_filled_blood = dd.read_parquet(blood_dir)
+    print("Calculate missing values after blood filling")
+    help.calculateMissing(merged_ddf)
+    cleaned_ddf = InputData.clean_dtypes(merged_filled_blood)
+    df_sample = cleaned_ddf.sample(frac=0.4).compute() 
+    # -----------------------------
+    # 5. Create Evaluation instance
+    # -----------------------------
+    evaluator = ev.Evaluation(
+        imputer=blood_imputer,      # the filling object
+        data=df_sample,             # sample for evaluation
+        columns_to_fill=blood_columns,
+        mask_rate=0.2,              # fraction of observed values to mask
+        n_runs=3
+    )
 
-# -----------------------------
-# 6. Run evaluation for each blood column
-# -----------------------------
-results = []
-for col in blood_columns:
-    print(f"Evaluating {col}...") 
-    res = evaluator.evaluate_masking(df_sample, col, mask_frac=0.2)
-    results.append(res)
+    # -----------------------------
+    # 6. Run evaluation for each blood column
+    # -----------------------------
+    results = []
+    for col in blood_columns:
+        print(f"Evaluating {col}...") 
+        res = evaluator.evaluate_masking(df_sample, col, mask_frac=0.2)
+        results.append(res)
 
-df_results = pd.DataFrame(results)
-print("\n📊 Blood Imputation Evaluation Results:")
-print(df_results)
-
-
-exit()
+    df_results = pd.DataFrame(results)
+    print("\n📊 Blood Imputation Evaluation Results:")
+    print(df_results)
 
 
 # Fill blood gases
-gases_columns = ['paco2', 'fio2', 'pao2']
-gases_imputer = ga.gasesImpute(merged_ddf,gases_columns,24)
-merged_gasesFilled_ddf=gases_imputer.imputeGases()
+gases_dir = begin_dir/'secondrun/filled/blood_filled_2nd.parquet'
 
-merged_gasesFilled_ddf.to_parquet("filled/merged_gases.parquet", write_index=False)
+if os.listdir(gases_dir) == []:   
+
+    print('begin fill platelet process')
+
+    #fill blood gases 
+    feature_map_blood = {
+        "platelet": [
+            "rbc", "hemoglobin", "hematocrit", "mcv", "mch", "mchc", "rdw",
+            "wbc", "creatinine",
+            "heart_rate", "resp_rate", "sbp", "dbp", "mbp", "spo2",
+            "glucose", 
+            "admission_age", "gender"
+        ],
+        "wbc": [
+            "rbc", "hemoglobin", "hematocrit", "mcv", "mch", "mchc",
+            "platelet",
+            "temperature", "spo2", "heart_rate", "resp_rate",
+            "creatinine", "glucose",
+            "admission_age", "gender"
+        ],
+        "rbc": [
+            "hemoglobin", "hematocrit", "mcv", "mch", "mchc",
+            "platelet", "wbc",
+            "heart_rate", "resp_rate", "sbp", "dbp", "mbp",
+            "temperature", 
+            "glucose", 
+            "admission_age", "gender"
+        ]
+    }
+
+    merged_filled_gases = dd.read_parquet(blood_dir)
+
+    sparse_features=['platelet','wbc', 'rdw','glucose','creatinine','paco2', 'fio2', 'pao2']
+
+    xgbImputer = xg.xgBoostFill(
+        target_columns=sparse_features,
+        features=features_columns,
+        feature_map=[],
+        short_gap_targets=sparse_features,
+        random_state=42
+    )
+
+    
+    cleaned_ddf = InputData.clean_dtypes(merged_filled_gases)
+    df_sample = cleaned_ddf.sample(frac=0.6).compute()  # small representative sample
+    
+    xgbImputer.fit(df_sample)
+    #meta = InputData.clean_dtypes(merged_filled_gases._meta)
+    ddf_filled = xgbImputer.transform(merged_filled_gases)  # Dask DF
+    ddf_filled = ddf_filled.persist()
+    ddf_filled.to_parquet(gases_dir, write_index=False)
+    # # 3. Evaluate XGBoost
+    # 7. Evaluate on a pandas sample using your evaluation class
+
+    xgboost_evaluator = ev.Evaluation(
+        imputer=xgbImputer,
+        data=df_sample,
+        columns_to_fill=sparse_features,
+        mask_rate=0.3,
+        n_runs=5
+    )
+
+    results_df_ml = xgboost_evaluator.evaluate_sparse_with_ml(
+        imputer=xgbImputer,
+        mask_frac=0.05,
+        n_runs=5
+    )
+    print(results_df_ml)
 
 
-df_sample = merged_gasesFilled_ddf.sample(frac=0.3).compute()  # small representative sample
 
-meta = InputData.clean_dtypes(df_merged_data._meta)
 
-# # 3. Evaluate XGBoost
-# 7. Evaluate on a pandas sample using your evaluation class
-xgboost_evaluator = ev.Evaluation(
-imputer=gases_imputer,
-data = df_sample,
-columns_to_fill=gases_columns, 
-mask_rate=0.3, 
-n_runs=3
+####SEPSIS PREDICTION######
+
+
+
+
+#first read data and delete unecesairy columns
+print ('begin sepsis prediction with all four methods')
+merged_filled_all = dd.read_parquet(gases_dir)
+
+cols_to_drop = ["fio2", "pao2", "paco2","pf_ratio","charttime_3","charttime_4","charttime_5"]
+merged_filled_all = merged_filled_all.drop(columns=cols_to_drop, errors="ignore")
+final_df = merged_filled_all.compute()
+missing_counts = final_df.isna().sum()
+print(missing_counts)
+
+cols_required = [
+    "heart_rate",
+    "resp_rate",
+    "temperature",
+    "sbp",
+    "dbp",
+    "mbp",
+    "spo2",
+    "pulse_pressure",
+    "wbc",
+    "platelet",
+    "rdw",
+    "glucose", 
+    "creatinine",
+]
+
+clean_df = final_df.dropna(subset=cols_required)
+clean_df["charttime"] = pd.to_datetime(clean_df["charttime"], errors="coerce")
+clean_df["icu_intime"] = pd.to_datetime(clean_df["icu_intime"], errors="coerce")
+
+
+clean_df["hours_since_icu_intime"] = (
+    (clean_df["charttime"] - clean_df["icu_intime"]).dt.total_seconds() / 3600.0
 )
 
-results, summary = evaluator.evaluate_filling_performance(merged_ddf, merged_gasesFilled_ddf)
-print(results,summary)
+clean_df = clean_df.sort_values(["stay_id", "charttime"])
+group = clean_df.groupby("stay_id")
+
+
+# total_rows = len(clean_df)
+# unique_stays = clean_df["stay_id"].nunique()
+# unique_subjects = clean_df["subject_id"].nunique()
+
+# print("Total rows:", total_rows)
+# print("Unique stay_id:", unique_stays)
+# print("Unique subject_id:", unique_subjects)
+# print(clean_df["label_sepsis_within_6h"].value_counts())
+# print(clean_df["label_sepsis_within_24h"].value_counts())
+
+
+
+# feature columns for lstm
+features = [
+    "gender", "admission_age", "hours_since_icu_intime", 
+    "icustay_seq", 
+    "hospstay_seq",  # static
+    "spo2", "sbp", "dbp", "pulse_pressure",
+    "heart_rate", "resp_rate", "temperature",
+    "mbp", "wbc", "platelet", "hematocrit", "hemoglobin",
+    "mch", "mchc", "mcv", "rbc", "rdw",
+    "glucose", "creatinine"
+]
+
+##LSTM##
+
+l_col_val="label_sepsis_within_24h"
+
+trainer = lstm.SepsisTrainer(
+    features=features,
+    label_col=l_col_val,  # or your chosen label
+    seq_len=30,
+    hidden_size=32,
+    num_layers=2,
+    batch_size=32,
+    lr=1e-3,
+    epochs=4,
+)
+
+trainer.prepare_data(clean_df, time_col="charttime")  # or "hour_index_rev" etc.
+trainer.train()
+
+# You can also re-evaluate later:
+
+val_loss, val_auc, val_acc, val_auprc, val_mcc, thr = trainer.evaluate(trainer.val_loader)
+print("Final validation -> Loss:", val_loss, "AUC:", val_auc, "AUPRC:", val_auprc, "MCC:", val_mcc, "thr:", thr, "Acc:", val_acc)
+
+
+def run_groupkfold_cv(
+    df,
+    trainer_kwargs,
+    time_col="charttime",
+    group_col="stay_id",
+    n_splits=5,
+):
+    gkf = GroupKFold(n_splits=n_splits)
+    groups = df[group_col].values
+
+    fold_metrics = []
+
+    for fold, (train_idx, val_idx) in enumerate(
+        gkf.split(df, y=df[trainer_kwargs["label_col"]], groups=groups),
+        start=1
+    ):
+        print(f"\n===== Fold {fold}/{n_splits} =====")
+
+        start_time = time.time()
+
+        df_train = df.iloc[train_idx].copy()
+        df_val = df.iloc[val_idx].copy()
+
+        trainer = lstm.SepsisTrainer(**trainer_kwargs)
+
+        trainer.prepare_data_from_splits(df_train, df_val, time_col=time_col)
+        trainer.train()
+        elapsed_sec = time.time() - start_time
+        elapsed_min = elapsed_sec / 60.0
+
+        val_loss, val_auc, val_acc, val_auprc, val_mcc, thr = trainer.evaluate(trainer.val_loader)
+
+        fold_metrics.append({
+            "fold": fold,
+            "auc": val_auc,
+            "auprc": val_auprc,
+            "mcc": val_mcc,
+            "acc": val_acc,
+            "thr": thr,
+            "time_min": elapsed_min,
+
+        })
+
+        print(
+            f"Fold {fold} -> "
+            f"AUC={val_auc:.4f}, "
+            f"AUPRC={val_auprc:.4f}, "
+            f"MCC={val_mcc:.4f}, "
+            f"thr={thr:.2f}, "
+            f"Acc={val_acc:.4f}",
+            f"Time={elapsed_min:.2f} min"
+            
+        )
+
+    
+
+
+    results = pd.DataFrame(fold_metrics)
+
+    print("\n===== CV Summary (mean ± std) =====")
+    for col in ["auc", "auprc", "mcc", "acc"]:
+        print(f"{col.upper()}: {results[col].mean():.4f} ± {results[col].std():.4f}")
+
+    print("\n===== Timing Summary =====")
+    print(
+        f"TIME (min): "
+        f"{results['time_min'].mean():.2f} ± "
+        f"{results['time_min'].std():.2f}"
+    )
+
+    return results
+
+# cv_results = run_groupkfold_cv(
+#     df=clean_df,
+#     trainer_kwargs=dict(
+#         features=features,
+#         label_col="label_sepsis_within_24h",
+#         seq_len=30,
+#         hidden_size=32,
+#         num_layers=2,
+#         batch_size=32,
+#         lr=1e-3,
+#         epochs=4,
+#         early_stop_patience=2,
+#         early_stop_metric="auprc",
+#     ),
+#     time_col="charttime",
+#     group_col="subject_id",  # or stay_id
+#     n_splits=5,
+# )
+
+
+##GRU##
+methods=['lstm','gru']
+
+cv_results_gru = run_groupkfold_cv(
+    df=clean_df,
+    trainer_kwargs=dict(
+        features=features,
+        label_col=l_col_val,
+        seq_len=30,
+        hidden_size=32,
+        num_layers=2,
+        batch_size=32,
+        lr=1e-3,
+        epochs=4,
+        early_stop_patience=2,
+        early_stop_metric="auprc",
+        model_type="gru",     # 👈 switch here
+        dropout=0.2,
+    ),
+    time_col="charttime",
+    group_col="subject_id",
+    n_splits=5,
+)
+
+
+
+trainer_kwargs=dict(
+    features=features,
+    label_col=l_col_val,
+    model_type="gru",
+    dropout=0.2,
+    seq_len=30,
+    hidden_size=32,
+    num_layers=2,
+    batch_size=32,
+    lr=1e-3,
+    epochs=4,
+    early_stop_patience=2,
+    early_stop_metric="auprc",
+)
+
+
+
+
 exit()
 
-# df_filled = dd.read_parquet("filled/vitals_filled.parquet")
+##########SO FAR SO GOOD######
 
-# imputer = vi.vitalsImputeNew(df_filled,checking_columns,15)
 
-# vitals_evaluator = ev.Evaluation(df_filled,imputer.get_checkingColumns(), mask_rate=0.5,n_runs=3)
 
-# evaluation_results = vitals_evaluator.simulate_and_evaluate_dask_filling()
-# print('evaluation_results for ffill bfill:')
-# print(evaluation_results)
 
-# def fill_temperature(g, col='temperature', edge_limit=3):
+#features = ['gender','admission_age','hospstay_seq','los_hospital','hospstay_seq','los_icu','icustay_seq','spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature','gcs',"wbc","platelet","hematocrit","hemoglobin",
+           # "mbp","mch","mchc","mcv","rbc","rdw","glucose","creatinine"]
+# features_2 = ['spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature']
+# features_3 = ['gender','admission_age','hospstay_seq','los_hospital','hospstay_seq','los_icu','icustay_seq','spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature','gcs','hemoglobin']
 
-#         # Forward fill
-#         g[col] = g[col].ffill(limit=edge_limit)
-#         # Backward fill
-#         g[col] = g[col].bfill(limit=edge_limit)
-#         return g
+# missing_rows = merged_data[merged_data['spo2'].isna()]
+# print(missing_rows)
 
-# reRun temperature filling because of sparcity
-# df_temp = pd.read_parquet("filled/vitals_filled.parquet")
-# df_temp = df_temp.sort_values(['stay_id', 'charttime'])
-# print('start refilling temperature')
-# df_temp = df_temp.groupby('stay_id').apply(fill_temperature)
 
-# df_temp.to_parquet("filled/temperature_filled.parquet", index=False)
+
+input_size= len(features)
+hidden_size=64
+num_layers=3
+# create the LSTM model
+lstm = LSTMClass(input_size,hidden_size,num_layers)
+
+# Set sequence length and create sequences
+sequence_length = 30
+sequences = lstm.create_sequences(final_df, sequence_length,features)
+tensors = lstm.createTensors(sequences)
+
+X=tensors[0]
+y=tensors[1]
+# Split into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.7, random_state=42)
+
+
+batch_size = 32
+train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
+test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+criterion = nn.BCELoss()  # Binary Cross-Entropy Loss
+optimizer = optim.Adam(lstm.parameters(), lr=0.001)
+
+# Train the model
+lstm.trainLSTM(train_loader, criterion, optimizer, epochs=10)
+
+# Evaluate the model
+lstm.evaluateLSTM(test_loader, criterion)
+
+lstm.createPlotPredictions(test_loader)
+
 
 
 # 2. Run XGBoost refinement
@@ -466,71 +772,6 @@ if os.listdir(glucCreat_dir) == []:
 
 # print(clean_df.compute().info())
 
-# -------Blood lab results preparation-------#
-blood_dir = 'filled/blood.parquet'
-blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'wbc', 'platelet', 'rbc', 'rdw']
-
-if os.listdir(blood_dir) == []:
-        print("read and prepare blood tests..")
-        df_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
-        #df_bloodResults = dd.read_csv('/root/scripts/new_data/24hours/blood_24_hours.csv', sep='|')
-
-        time_interval = 3600
-        glucCreat_df=[]
-        print('initial labs info before normalization:')
-        print(df_bloodResults.info())
-        # Initialize imputer
-        labResult = lb.bloodImpute(
-                blood=df_bloodResults,
-                glucoseCreatinine=glucCreat_df,
-                blood_columns=blood_columns,
-                glucCreat_columns=glucCreat_columns,
-                interval=time_interval
-        )
-
-        #Delete initial blood dataframe to gain memory
-        del df_bloodResults
-        #labResult = lb.bloodImpute(df_bloodResults,glucCreat_df,blood_columns,glucCreat_columns,time_interval)
-        blood_df = labResult.prepareblood().compute()  # Convert from Dask to Pandas for imputation
-        print(blood_df.head(100))
-
-        bloodResults = labResult.prepareblood()
-        print(bloodResults.head(200))
-
-        df_sample = bloodResults.sample(frac=0.4).compute() 
-
-        columns_tofill = blood_columns+glucCreat_columns+gases_columns
-        
-        # Initialize evaluator
-        # Initialize imputer (for evaluation)
-        blood_imputer = lb.bloodImpute(
-        blood=blood_df,
-        glucoseCreatinine=None,
-        blood_columns=blood_columns,
-        glucCreat_columns=glucCreat_columns,
-        interval=2
-        )
-
-        # Initialize evaluator
-        blood_evaluator = ev.Evaluation(
-        imputer=blood_imputer,
-        data=blood_df,
-        columns_to_fill=blood_columns,
-        mask_rate=0.3,
-        n_runs=3
-        )
-
-        # Run evaluation
-        results = []
-        for col in blood_columns:
-                res = blood_evaluator.evaluate_masking(blood_df, col, mask_frac=0.3)
-                results.append(res)
-
-        results_bdf = pd.DataFrame(results)
-        ('print results:')
-        print(results_bdf)
-
-exit()
 
 # merge vitals and blood
 # 08/10 i have to create the merging
@@ -640,10 +881,6 @@ exit()
 
 # delete blood result object in order to free memory
 
-# Create another object with df_vitals_blood and fill blood features
-labImputer = lb.labsImpute(df_vitals_blood,glucCreat_df,lab_columns,gl_columns,time_interval)
-df_final_dataset = labImputer.populateLabResults(gases_columns)
-
 
 # 4. Evaluate imputation quality across all vitals
 # eval_results = imputer.evaluate_all_vitals(clean_df, [
@@ -706,49 +943,4 @@ print(f"Number of groups: {n_groups}")
 final_clean_df.to_csv("final_for_lstm_withsepsis.csv", sep="|", index=False)
 
 exit()
-# feature columns for lstm
-features = ['gender','admission_age','hospstay_seq','los_hospital','hospstay_seq','los_icu','icustay_seq','spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature','gcs',"wbc","platelet","hematocrit","hemoglobin",
-            "mbp","mch","mchc","mcv","rbc","rdw","glucose","creatinine"]
-features_2 = ['spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature']
-features_3 = ['gender','admission_age','hospstay_seq','los_hospital','hospstay_seq','los_icu','icustay_seq','spo2', 'sbp', 'dbp', 'pulse_pressure', 'heart_rate', 'resp_rate','temperature','gcs','hemoglobin']
 
-# missing_rows = merged_data[merged_data['spo2'].isna()]
-# print(missing_rows)
-
-
-input_size= len(features)
-hidden_size=64
-num_layers=3
-# create the LSTM model
-lstm = LSTMClass(input_size,hidden_size,num_layers)
-
-# Set sequence length and create sequences
-sequence_length = 30
-sequences = lstm.create_sequences(final_df, sequence_length,features)
-tensors = lstm.createTensors(sequences)
-
-X=tensors[0]
-y=tensors[1]
-# Split into training and test sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.7, random_state=42)
-
-
-batch_size = 32
-train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
-test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
-
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-criterion = nn.BCELoss()  # Binary Cross-Entropy Loss
-optimizer = optim.Adam(lstm.parameters(), lr=0.001)
-
-# Train the model
-lstm.trainLSTM(train_loader, criterion, optimizer, epochs=10)
-
-# Evaluate the model
-lstm.evaluateLSTM(test_loader, criterion)
-
-lstm.createPlotPredictions(test_loader)
-
-exit()

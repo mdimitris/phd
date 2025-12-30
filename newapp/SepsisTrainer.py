@@ -8,6 +8,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, accuracy_score,  average_precision_score,  matthews_corrcoef
 from LSTMImputer import LSTMModel
 from GRUModel import GRUModel
+import time
+import lightgbm as lgb
+import xgboost as xgb
 
 class SepsisTrainer:
     def __init__(
@@ -23,8 +26,10 @@ class SepsisTrainer:
         lr=1e-3,
         epochs=10,
         early_stop_patience=2,         
-        early_stop_metric="auprc",      # "auprc" or "mcc" or "auc"
-        mcc_threshold_grid=None,        
+        early_stop_metric="auprc", 
+        mcc_threshold_grid=None,   
+        tree_params=None, 
+        early_stopping_rounds=50     
     ):
         self.features = features
         self.label_col = label_col
@@ -32,11 +37,12 @@ class SepsisTrainer:
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.batch_size = batch_size
-        self.model_type = model_type.lower()
+        self.model_type = model_type
         self.dropout = dropout
         self.lr = lr
         self.epochs = epochs
-
+        self.tree_params = tree_params or {}
+        self.early_stopping_rounds = early_stopping_rounds
         self.early_stop_patience = early_stop_patience
         self.early_stop_metric = early_stop_metric.lower()
 
@@ -178,7 +184,9 @@ class SepsisTrainer:
         # Drop rows missing essentials (avoid NaNs flowing into scaler/model)
         needed = ["stay_id", time_col, self.label_col] + self.features
         df = df.dropna(subset=[c for c in needed if c in df.columns]).copy()
-
+        print(f"Rows (after cleaning): {len(df)}")
+        print(f"Patients: {df['subject_id'].nunique()}")
+        print(f"Stays: {df['stay_id'].nunique()}")
         # Sort by stay + time
         df = df.sort_values(["stay_id", time_col]).reset_index(drop=True)
 
@@ -200,6 +208,8 @@ class SepsisTrainer:
         # Create sequences
         X_train, y_train = self._create_sequences_from_df(df_train)
         X_val, y_val = self._create_sequences_from_df(df_val)
+        
+
         print(f"Train sequences: {X_train.shape[0]}, Val sequences: {X_val.shape[0]}")
 
         # ✅ Compute pos_weight from TRAIN sequences (best practice)
@@ -367,4 +377,166 @@ class SepsisTrainer:
 
         return float(np.mean(losses)), float(auc), float(acc), float(auprc), float(best_mcc), float(best_thr)
     
+
+    #for xgboost and lightgbm
+    def prepare_tabular_from_splits(
+        self,
+        df_train: pd.DataFrame,
+        df_val: pd.DataFrame,
+    ):
+        """
+        Prepare tabular (non-sequential) data for tree models (XGBoost / LightGBM).
+
+        - Uses ONLY train split to compute class imbalance
+        - Returns numpy-ready X / y
+        - No time leakage
+        """
+
+        df_train = df_train.copy()
+        df_val = df_val.copy()
+
+        # ----------------------------
+        # Basic preprocessing
+        # ----------------------------
+        for df in (df_train, df_val):
+            if "gender" in df.columns and df["gender"].dtype == "object":
+                df["gender"] = df["gender"].map({"M": 1, "F": 0}).astype("float32")
+
+            # tree models want integer labels
+            df[self.label_col] = df[self.label_col].astype(int)
+
+        # ----------------------------
+        # Drop rows with missing values
+        # ----------------------------
+        needed = [self.label_col] + self.features
+        df_train = df_train.dropna(subset=needed).copy()
+        df_val = df_val.dropna(subset=needed).copy()
+
+        # ----------------------------
+        # Split X / y
+        # ----------------------------
+        X_train = df_train[self.features].values
+        y_train = df_train[self.label_col].values
+
+        X_val = df_val[self.features].values
+        y_val = df_val[self.label_col].values
+
+        # ----------------------------
+        # Class imbalance (TRAIN ONLY)
+        # ----------------------------
+        pos = y_train.sum()
+        neg = len(y_train) - pos
+
+        if pos == 0:
+            raise ValueError("No positive samples in training split.")
+
+        self.scale_pos_weight = float(neg / pos)
+
+        return X_train, y_train, X_val, y_val
+
+
+
+
+    def train_tree_from_splits(self, df_train: pd.DataFrame, df_val: pd.DataFrame):
+        X_train, y_train, X_val, y_val = self.prepare_tabular_from_splits(df_train, df_val)
+
+        t0 = time.time()
+
+        if self.model_type == "lgbm":
+            params = dict(
+                n_estimators=5000,
+                learning_rate=0.03,
+                num_leaves=63,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_lambda=1.0,
+                objective="binary",
+                n_jobs=-1,
+                random_state=42,
+            )
+            params.update(self.tree_params)
+
+            model = lgb.LGBMClassifier(**params, scale_pos_weight=self.scale_pos_weight)
+            model.fit(
+                X_train, y_train,
+                eval_set=[(X_val, y_val)],
+                eval_metric="average_precision",
+                callbacks=[lgb.early_stopping(self.early_stopping_rounds, verbose=False)],
+            )
+            probs = model.predict_proba(X_val)[:, 1]
+            best_iter = getattr(model, "best_iteration_", None)
+
+        elif self.model_type == "xgb":
+
+            # 1️⃣ Convert to DMatrix
+            dtrain = xgb.DMatrix(X_train, label=y_train)
+            dval   = xgb.DMatrix(X_val, label=y_val)
+
+            # 2️⃣ XGBoost native params (IMPORTANT differences marked)
+            params = dict(
+                max_depth=4,
+                eta=0.03,                     # ← learning_rate → eta
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_lambda=1.0,                  # ← reg_lambda → lambda_
+                objective="binary:logistic",
+                eval_metric="aucpr",
+                tree_method="hist",
+                scale_pos_weight=self.scale_pos_weight,
+                seed=42,
+            )
+
+            params.update(self.tree_params)
+
+            # 3️⃣ Train with early stopping (THIS NOW WORKS)
+            t0 = time.time()
+
+            model = xgb.train(
+                params=params,
+                dtrain=dtrain,
+                num_boost_round=2000,         # ← n_estimators → num_boost_round
+                evals=[(dval, "val")],
+                early_stopping_rounds=self.early_stopping_rounds,
+                verbose_eval=False,
+            )
+
+            time_min = (time.time() - t0) / 60.0
+
+            # 4️⃣ Outputs
+            best_iter = model.best_iteration
+            probs = model.predict(dval)
+
+            #best_iter = getattr(model, "best_iteration", None)
+
+        else:
+            raise ValueError(f"Unsupported tree model_type: {self.model_type}")
+
+        time_min = (time.time() - t0) / 60.0
+
+        # reuse your existing evaluate logic (but it expects a loader)
+        # so do a small inline evaluation here:
+        auc = roc_auc_score(y_val, probs) if len(np.unique(y_val)) > 1 else float("nan")
+        auprc = average_precision_score(y_val, probs) if len(np.unique(y_val)) > 1 else float("nan")
+        preds_05 = (probs >= 0.5).astype(int)
+        acc = accuracy_score(y_val, preds_05)
+
+        best_mcc, best_thr = -1.0, 0.5
+        for t in self.mcc_threshold_grid:
+            preds_t = (probs >= t).astype(int)
+            mcc_t = matthews_corrcoef(y_val, preds_t)
+            if mcc_t > best_mcc:
+                best_mcc, best_thr = mcc_t, float(t)
+
+        return dict(
+            auc=float(auc),
+            auprc=float(auprc),
+            acc=float(acc),
+            mcc=float(best_mcc),
+            thr=float(best_thr),
+            time_min=float(time_min),
+            best_iter=best_iter,
+            scale_pos_weight=float(self.scale_pos_weight),
+        )
+
+
 

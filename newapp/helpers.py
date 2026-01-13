@@ -16,16 +16,6 @@ def prepareDataset(ddf, blood_cols,drop_cols,dataset):
         # return ddf
 
 
-# def prepareGases(self):
-
-#     #     self.gases[["subject_id", "stay_id","hadm_id"]] = self.gases[["subject_id", "stay_id","hadm_id"]].astype(pd.Int32Dtype())
-#     #     self.gases["charttime"]=dd.to_datetime(self.gases['charttime'], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
-#     #     self.gases[self.columns]=self.gases[self.columns].astype('float').astype('float32').round(2)
-#     #     self.gases.drop(columns=['hadm_id', 'sofa_time','pf_ratio'],  errors='ignore')
-#     #     return self.imputeGases()
-
-
-
 def calculateMissing(ddf):
     # Compute percentage of missing values for each column
     missing_percentage = (ddf.isnull().sum() / len(ddf) * 100).compute()

@@ -46,7 +46,7 @@ class SepsisTrainer:
         self.early_stop_patience = early_stop_patience
         self.early_stop_metric = early_stop_metric.lower()
 
-        # threshold candidates for MCC optimization
+
         if mcc_threshold_grid is None:
             self.mcc_threshold_grid = np.linspace(0.05, 0.95, 19)
         else:
@@ -61,10 +61,9 @@ class SepsisTrainer:
         self.train_loader = None
         self.val_loader = None
 
-        # NEW: store class weight for BCEWithLogitsLoss
         self.pos_weight = None
 
-        # NEW: best checkpoint
+
         self.best_state = None
         self.best_score = -np.inf
 
@@ -107,7 +106,7 @@ class SepsisTrainer:
         df_train = df_train.dropna(subset=[c for c in needed if c in df_train.columns]).copy()
         df_val = df_val.dropna(subset=[c for c in needed if c in df_val.columns]).copy()
 
-        # Sort by stay + time
+        # Sort by stay and time
         df_train = df_train.sort_values(["stay_id", time_col]).reset_index(drop=True)
         df_val = df_val.sort_values(["stay_id", time_col]).reset_index(drop=True)
 
@@ -190,7 +189,7 @@ class SepsisTrainer:
         # Sort by stay + time
         df = df.sort_values(["stay_id", time_col]).reset_index(drop=True)
 
-        # Split by stay_id
+        # separate by stay_id
         unique_stays = df["stay_id"].unique()
         train_stays, val_stays = train_test_split(
             unique_stays, test_size=0.3, random_state=42
@@ -200,7 +199,7 @@ class SepsisTrainer:
         df_val = df[df["stay_id"].isin(val_stays)].copy()
         print(f"Train stays: {len(train_stays)}, Val stays: {len(val_stays)}")
 
-        # ✅ Fit scaler on TRAIN ONLY (avoids leakage)
+     
         self.scaler_X.fit(df_train[self.features])
         df_train[self.features] = self.scaler_X.transform(df_train[self.features])
         df_val[self.features] = self.scaler_X.transform(df_val[self.features])
@@ -384,20 +383,16 @@ class SepsisTrainer:
         df_train: pd.DataFrame,
         df_val: pd.DataFrame,
     ):
-        """
-        Prepare tabular (non-sequential) data for tree models (XGBoost / LightGBM).
-
-        - Uses ONLY train split to compute class imbalance
-        - Returns numpy-ready X / y
-        - No time leakage
-        """
+        
+        #Prepare tabular data for XGBoost and LightGBM.
+        
 
         df_train = df_train.copy()
         df_val = df_val.copy()
 
-        # ----------------------------
-        # Basic preprocessing
-        # ----------------------------
+
+        # Preprocess
+
         for df in (df_train, df_val):
             if "gender" in df.columns and df["gender"].dtype == "object":
                 df["gender"] = df["gender"].map({"M": 1, "F": 0}).astype("float32")
@@ -405,25 +400,21 @@ class SepsisTrainer:
             # tree models want integer labels
             df[self.label_col] = df[self.label_col].astype(int)
 
-        # ----------------------------
+
         # Drop rows with missing values
-        # ----------------------------
         needed = [self.label_col] + self.features
         df_train = df_train.dropna(subset=needed).copy()
         df_val = df_val.dropna(subset=needed).copy()
 
-        # ----------------------------
-        # Split X / y
-        # ----------------------------
         X_train = df_train[self.features].values
         y_train = df_train[self.label_col].values
 
         X_val = df_val[self.features].values
         y_val = df_val[self.label_col].values
 
-        # ----------------------------
-        # Class imbalance (TRAIN ONLY)
-        # ----------------------------
+
+        # Train 
+
         pos = y_train.sum()
         neg = len(y_train) - pos
 
@@ -468,17 +459,17 @@ class SepsisTrainer:
 
         elif self.model_type == "xgb":
 
-            # 1️⃣ Convert to DMatrix
+
             dtrain = xgb.DMatrix(X_train, label=y_train)
             dval   = xgb.DMatrix(X_val, label=y_val)
 
-            # 2️⃣ XGBoost native params (IMPORTANT differences marked)
+          
             params = dict(
                 max_depth=4,
-                eta=0.03,                     # ← learning_rate → eta
+                eta=0.03,                  
                 subsample=0.8,
                 colsample_bytree=0.8,
-                reg_lambda=1.0,                  # ← reg_lambda → lambda_
+                reg_lambda=1.0,                  
                 objective="binary:logistic",
                 eval_metric="aucpr",
                 tree_method="hist",
@@ -488,13 +479,13 @@ class SepsisTrainer:
 
             params.update(self.tree_params)
 
-            # 3️⃣ Train with early stopping (THIS NOW WORKS)
+            
             t0 = time.time()
 
             model = xgb.train(
                 params=params,
                 dtrain=dtrain,
-                num_boost_round=2000,         # ← n_estimators → num_boost_round
+                num_boost_round=2000,         
                 evals=[(dval, "val")],
                 early_stopping_rounds=self.early_stopping_rounds,
                 verbose_eval=False,
@@ -502,19 +493,16 @@ class SepsisTrainer:
 
             time_min = (time.time() - t0) / 60.0
 
-            # 4️⃣ Outputs
             best_iter = model.best_iteration
             probs = model.predict(dval)
 
-            #best_iter = getattr(model, "best_iteration", None)
 
         else:
             raise ValueError(f"Unsupported tree model_type: {self.model_type}")
 
         time_min = (time.time() - t0) / 60.0
 
-        # reuse your existing evaluate logic (but it expects a loader)
-        # so do a small inline evaluation here:
+
         auc = roc_auc_score(y_val, probs) if len(np.unique(y_val)) > 1 else float("nan")
         auprc = average_precision_score(y_val, probs) if len(np.unique(y_val)) > 1 else float("nan")
         preds_05 = (probs >= 0.5).astype(int)

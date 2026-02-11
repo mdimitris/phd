@@ -9,7 +9,7 @@ import os
 import warnings
 
 
-# Suppress Dask performance warnings for cleaner output
+
 warnings.filterwarnings("ignore", category=UserWarning, module="dask")
 
 class LSTMModel(nn.Module):
@@ -63,16 +63,10 @@ class LSTMImputer:
         return np.array(X), np.array(y)
 
     def fit(self, ddf):
-        """
-        Fits the LSTM model on the non-missing data.
-        
-        Args:
-            ddf (dask.DataFrame): The Dask DataFrame to train on.
-        """
+
         print("Starting model training...")
         
-        # For large datasets, training on a sample is more practical.
-        # This computes a fraction of the data into a pandas DataFrame.
+        # compute some data into a pandas DataFrame.
         print("Fetching and preparing training data sample...")
         df_train_sample = ddf[self.all_cols].dropna().sample(frac=0.1, random_state=42).compute()
         
@@ -115,16 +109,7 @@ class LSTMImputer:
         return self
 
     def transform(self, ddf):
-        """
-        Fills missing values in the target column of the DataFrame.
-        This method handles both Dask and pandas DataFrames.
-
-        Args:
-            ddf (dask.DataFrame or pandas.DataFrame): The DataFrame to impute.
-        
-        Returns:
-            dask.DataFrame or pandas.DataFrame: DataFrame with the target column imputed, matching the input type.
-        """
+       
         if self.model is None:
             raise RuntimeError("Imputer has not been fitted. Please call .fit() first.")
         
@@ -132,10 +117,7 @@ class LSTMImputer:
         self.model.eval()
 
         def impute_partition(df):
-            """
-            The function to apply to each overlapping partition or a whole pandas DataFrame.
-            This version uses integer positions (iloc) to be robust against duplicate indices.
-            """
+
             df = df.copy()
             target_col_name = self.target_col[0]
             
@@ -199,13 +181,7 @@ class LSTMImputer:
         return imputed_result
     
     def save(self, ddf, path):
-        """
-        Saves the Dask DataFrame to a Parquet file.
 
-        Args:
-            ddf (dask.DataFrame): The DataFrame to save.
-            path (str): The directory path to save the Parquet file.
-        """
         print(f"Saving imputed DataFrame to {path}...")
         if not os.path.exists(path):
             os.makedirs(path)

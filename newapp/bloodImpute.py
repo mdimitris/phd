@@ -26,9 +26,9 @@ class bloodImpute:
         os.makedirs(self.output_folder, exist_ok=True)
         os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
 
-    # --------------------------------------------------
-    # STEP 1: Prefill missing values by stay_id
-    # --------------------------------------------------
+
+    #Prefill missing values by stay_id
+
     def prefill(self):
         print("🩸 Prefill missing values by stay_id...")
 
@@ -62,9 +62,9 @@ class bloodImpute:
 
         print("✅ Prefill complete.")
 
-    # --------------------------------------------------
-    # STEP 2: Train global MICE model
-    # --------------------------------------------------
+
+    #Train global MICE model
+
     def train_global_model(self, iterations=4):
         print("\n🧠 Training global MICE model...")
         
@@ -83,7 +83,7 @@ class bloodImpute:
         sample_df = sample_df.astype("float32")
 
         if sample_df.isnull().sum().sum() == 0:
-            print("⚠️ No missing values found — skipping MICE training.")
+            print("No missing values found — skipping MICE training.")
             return False
         #mean_match = schemes.mean_match_default
         self.kds_global = mf.ImputationKernel(
@@ -100,9 +100,8 @@ class bloodImpute:
         print(f"✅ Global MICE model trained and saved at {self.model_path}")
         return True
 
-    # --------------------------------------------------
-    # STEP 3: Apply global MICE kernel batch-wise
-    # --------------------------------------------------
+    # Apply global MICE kernel batch-wise
+
     def apply_global_model(self):
         print("\n💉 Applying global MICE model to full dataset...")
 
@@ -113,7 +112,7 @@ class bloodImpute:
                 self.kds_global = mf.ImputationKernel(dummy_df, datasets=1)
                 self.kds_global.load_kernel(self.model_path)
             else:
-                print("⚠️ No MICE model found — will save Parquets without imputation.")
+                print("No MICE model found — save Parquets without imputation.")
 
         # Unique stay_ids
         unique_stays = self.blood["stay_id"].drop_duplicates().compute().to_numpy()
@@ -155,19 +154,19 @@ class bloodImpute:
             gc.collect()
             batch_num += 1
 
-        print("✅ Global MICE applied (or skipped) and all Parquets saved.")
+        print("✅ Global MICE applied,all Parquets saved.")
 
-    # --------------------------------------------------
-    # STEP 4: Run full pipeline
-    # --------------------------------------------------
+
+    # Run the pipeline
+
     def run(self):
-        print("\n🚀 Running full blood imputation pipeline...\n")
+        print("Running full blood imputation pipeline...\n")
         self.prefill()
         print('empty after prefill blodd columns:')
         print(self.blood[self.blood_columns].isna().sum())
         self.train_global_model()
         self.apply_global_model()
-        print("\n✅ Pipeline complete: Prefill + MICE (or Parquets only) done.")
+        print("Pipeline complete: Prefill + MICE done.")
 
     def transform(self, df):
         # If using global kernel

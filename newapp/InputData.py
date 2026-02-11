@@ -33,7 +33,7 @@ def clean_dtypes(df):
 #this is for vitals cleaning
 def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Replace "NULL" with NaN
-    ddf = ddf.replace("NULL", None)  # Dask supports None as missing
+    ddf = ddf.replace("NULL", None)  
     print("Unique ICU admissions before cleaning the dask dataframe:", len(ddf['stay_id'].drop_duplicates().compute()))
     print("Unique patients before cleaning the dask dataframe:", len(ddf['subject_id'].drop_duplicates().compute()))
    
@@ -48,11 +48,10 @@ def clearEmpties_ddf(ddf, columns, time_field, thresh_num):
     # Convert time field to datetime
     ddf[time_field] = dd.to_datetime(ddf[time_field], format="%Y-%m-%d %H:%M:%S.%f", errors="coerce")
     
-    # Sort within partitions (cheaper than full sort)
+    # Sort within partitions
     ddf = ddf.map_partitions(lambda df: df.sort_values(by=["stay_id", time_field]))
     
-    # Optional: repartition if you plan global operations
-    # ddf = ddf.repartition(npartitions=10)
+
     
     return ddf
 
@@ -86,7 +85,7 @@ def transFloat32 (df, columns):
     return df
 
 
-# ---START of ffill bfill evaluation-------#
+#Start of ffill bfill evaluation
 def simulate_missing(self,df, col, frac=0.2, seed=42):
         import numpy as np
 
@@ -111,14 +110,13 @@ def simulate_missing(self,df, col, frac=0.2, seed=42):
         return df, sample_idx
 
 def evaluate_imputation(self, df, col, sample_idx):
-        # Ensure ground truth exists
+        # Ensure ground truth
         if f"{col}_true" not in df.columns:
-            raise ValueError(f"{col}_true column missing. You need to simulate missing values with ground truth first.")
+            raise ValueError(f"{col}_true column missing.")
 
         y_true = df.loc[sample_idx, f"{col}_true"]
         y_pred = df.loc[sample_idx, col]
 
-        # Filter out rows where y_pred is still NaN
         mask = ~y_pred.isna()
         y_true_clean = y_true[mask]
         y_pred_clean = y_pred[mask]
@@ -143,13 +141,13 @@ def mergeDataframes (begin_dir):
     gluc_path=str(begin_dir/"secondrun/unfilled/glucCreat.parquet/*.parquet")
     output_path=str(begin_dir/"secondrun/unfilled/all_merged.parquet/")
 
-    # Connect (in-memory or persistent)
+
     con = duckdb.connect()
 
-    # Optional: control parallelism (number of threads)
+
     con.execute("SET threads = 6;")
 
-    # 1️⃣ Run the chained ASOF joins
+    #ASOF joins
     con.execute(f"""
     CREATE OR REPLACE TABLE all_merged AS
     WITH vitals_blood AS (

@@ -1,22 +1,27 @@
+import sys
+print("PYTHON:", sys.executable)
 import pandas as pd
 import InputData
 import vitalsImputeNew as vi
-import glucoseImpute as gl 
-import gasesImpute as ga 
-import numpy as np
-import InputData
+# import glucoseImpute as gl 
+# import gasesImpute as ga 
+# import numpy as np
+import multiprocessing
 import Evaluation as ev
 import dask.dataframe as dd
 import pyarrow.parquet as pa
 import os
 import xgBoostFill as xg
-from LSTMImputer import LSTMImputer
+#from LSTMImputer import LSTMImputer
 import SepsisTrainer  as lstm
 import helpers as help
 import bloodImpute as bloodImp
 from pathlib import Path
 from sklearn.model_selection import GroupKFold
 import time
+import xgboost as xgb
+import torch
+import joblib
 
 features_columns = ['gender', 'hospstay_seq', 'icustay_seq', 'admission_age', 'los_hospital', 'los_icu', "spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp","temperature"]
 blood_columns = ['hematocrit', 'hemoglobin', 'mch', 'mchc', 'mcv', 'rbc']
@@ -25,6 +30,7 @@ glucCreat_columns = ["creatinine","glucose"]
 # ------------24 hours-------------#
 # vitals_dir="filled/vitals_filled.parquet/"
 #vitals_dir="/root/scripts/newapp/secondrun/vitals_filled.parquet/"
+os.system('cls' if os.name == 'nt' else 'clear')
 
 while True:
     environment = input("Please choose environment, 1: Windows  2: Linux: ")
@@ -43,9 +49,14 @@ while True:
         print("Wrong value for environment, please try again.")
 
 
-vitals_dir = begin_dir/'secondrun/vitals_filled.parquet'
+vitals_dir = begin_dir/'secondrun/vitals_filled'
 
-time_interval = 15
+
+
+print("CPUS Available:", os.cpu_count())
+print("Multiprocessing CPUs:", multiprocessing.cpu_count())
+
+time_interval = 120
 vitals_columns = ["spo2", "sbp","dbp","pulse_pressure", "heart_rate","resp_rate", "mbp"]
 dtypes = {
         "label_sepsis_within_6h": "Int8",
@@ -67,14 +78,14 @@ if os.listdir(vitals_dir) == []:
 
     rows = 100000
     ddf_vitals = dd.read_csv(
-        #"/root/scripts/newapp/vitalsDemo.csv", #use for testing purposes
+        #data_dir/'24hours/vitalsDemo.csv', #use for testing purposes
         data_dir/'24hours/vitals_24_hours_final.csv',
         dtype=dtypes,
         sep="|",
     )
     
     # 2. Create the imputer object
-    imputer = vi.vitalsImputeNew(ddf_vitals, vitals_columns, time_interval)
+    imputer = vi.vitalsImputeNew(ddf_vitals, vitals_columns, time_interval,vitals_dir)
     # 3. Prepare and impute the data
     imputer.prepareVitals()
     
@@ -83,10 +94,10 @@ if os.listdir(vitals_dir) == []:
     ddf_vitals_filled = dd.read_parquet(vitals_dir)        
     cleaned_ddf = InputData.clean_dtypes(ddf_vitals_filled)
     df_sample = cleaned_ddf.sample(frac=0.3).compute() 
-
+  
     
     # Step 3: Run evaluation
-    imputer = vi.vitalsImputeNew(df_sample, vitals_columns, time_interval)
+    imputer = vi.vitalsImputeNew(df_sample, vitals_columns, time_interval,vitals_dir)
 
     vitals_evaluator = ev.Evaluation(
         imputer, df_sample, columns_to_fill=vitals_columns, mask_rate=0.2, n_runs=3
@@ -109,17 +120,7 @@ merged_dir = begin_dir/'secondrun/unfilled/all_merged.parquet'
 
 if os.listdir(merged_dir) == []:    
     print('create parquets from csv files')
-        # #ddf_bloodResults = dd.read_csv(r"C:\phd-final\phd\new_data\24hours\blood_24_hours.csv", sep='|')
-        # ddf_bloodResults = dd.read_csv("/root/scripts/new_data/24hours/blood_24_hours.csv", sep='|')
-        # help.prepareDataset(ddf_bloodResults,blood_columns,["rdwsd","admittime"],'blood')
-
-        # ddf_gases = dd.read_csv("/root/scripts/new_data/24hours/gases_24_hours_final.csv", dtype={"charttime": "object"}, sep='|')
-        # help.prepareDataset(ddf_gases,gases_columns,["hadm_id","sofa_time"],'gases')    
-
-        # ddf_glucoCreat = dd.read_csv("/root/scripts/new_data/24hours/glucose_creatine_24_hours.csv", dtype={"charttime": "object"}, sep='|')
-        # help.prepareDataset(ddf_glucoCreat,glucCreat_columns,["hadm_id"],'glucCreat')
-
-    ddf_vitals = dd.read_parquet(begin_dir/"secondrun/vitals_filled.parquet/")
+    ddf_vitals = dd.read_parquet(begin_dir/"secondrun/vitals_filled/")
     print(ddf_vitals.info())
     InputData.mergeDataframes(begin_dir)
 
@@ -137,7 +138,7 @@ if os.listdir(temperature_folder) == []:
     help.diagnostics(merged_ddf,df_vitals)
 
     
-    temperature_imputer = vi.vitalsImputeNew(merged_ddf,['temperature'], 7)
+    temperature_imputer = vi.vitalsImputeNew(merged_ddf,['temperature'], 7,temperature_folder)
 
     # Fill temperature and save result
     filled_ddf = temperature_imputer.fill_temperature_continuous(
@@ -166,6 +167,7 @@ if os.listdir(temperature_folder) == []:
 
     df_results = pd.DataFrame(results)
     print(df_results)
+    
 
 
 #since I finished with vitals now read final parquets  in temperature filled for blood results filling
@@ -173,6 +175,7 @@ blood_dir = begin_dir/'secondrun/filled/blood_filled.parquet'
 
 
 merged_filled_blood = dd.read_parquet(temperature_folder)
+print(list(merged_filled_blood.columns))
 
 if os.listdir(blood_dir) == []:   
 
@@ -182,8 +185,9 @@ if os.listdir(blood_dir) == []:
     blood_imputer = bloodImp.bloodImpute(
         blood_ddf=merged_filled_blood,
         blood_columns=blood_columns,
-        sample_size=250000,  # for MICE training sample
+        sample_size=300000,  # for MICE training sample
         output_folder=blood_dir,  # folder
+        dataset_name='mimic',
         n_output_files=128  # save in 128 Parquets
     )
 
@@ -198,6 +202,7 @@ if os.listdir(blood_dir) == []:
     print("Calculate missing values after blood filling")
     help.calculateMissing(merged_ddf)
     cleaned_ddf = InputData.clean_dtypes(merged_filled_blood)
+
     df_sample = cleaned_ddf.sample(frac=0.4).compute() 
     # -----------------------------
     # 5. Create Evaluation instance
@@ -274,6 +279,12 @@ if os.listdir(gases_dir) == []:
     df_sample = cleaned_ddf.sample(frac=0.6).compute()  # small representative sample
     
     xgbImputer.fit(df_sample)
+    joblib.dump(
+    xgbImputer,
+    "models/xgb_sparse_imputer.pkl"
+    )
+
+    print("Saved sparse imputer -> models/xgb_sparse_imputer.pkl")
     #meta = InputData.clean_dtypes(merged_filled_gases._meta)
     ddf_filled = xgbImputer.transform(merged_filled_gases)  # Dask DF
     ddf_filled = ddf_filled.persist()
@@ -296,10 +307,17 @@ if os.listdir(gases_dir) == []:
     )
     print(results_df_ml)
 
+    results_df_ml.to_csv(
+        begin_dir/"xgb_sparse_imputation_results.csv",
+        index=False
+    )
+
+    print("Saved results to:", begin_dir/"xgb_sparse_imputation_results.csv")
+
 
 ####SEPSIS PREDICTION######
 
-import xgboost as xgb
+
 print('xgboost_version:',xgb.__version__)
 
 
@@ -313,6 +331,8 @@ final_df = merged_filled_all.compute()
 print("Total rows:",  len(final_df))
 print("Unique subject_id:", final_df["subject_id"].nunique())
 print("Unique stay_id:", final_df["stay_id"].nunique())
+
+
 
 missing_counts = final_df.isna().sum()
 
@@ -347,16 +367,26 @@ clean_df = clean_df.sort_values(["stay_id", "charttime"])
 group = clean_df.groupby("stay_id")
 
 
-# total_rows = len(clean_df)
-# unique_stays = clean_df["stay_id"].nunique()
-# unique_subjects = clean_df["subject_id"].nunique()
+total_rows = len(clean_df)
+unique_stays = clean_df["stay_id"].nunique()
+unique_subjects = clean_df["subject_id"].nunique()
 
-# print("Total rows:", total_rows)
-# print("Unique stay_id:", unique_stays)
-# print("Unique subject_id:", unique_subjects)
-# print(clean_df["label_sepsis_within_6h"].value_counts())
-# print(clean_df["label_sepsis_within_24h"].value_counts())
+print("Total rows:", total_rows)
+print("Unique stay_id:", unique_stays)
+print("Unique subject_id:", unique_subjects)
+print(clean_df["label_sepsis_within_6h"].value_counts())
+print(clean_df["label_sepsis_within_8h"].value_counts())
+print(clean_df["label_sepsis_within_12h"].value_counts())
+print(clean_df["label_sepsis_within_24h"].value_counts())
 
+
+
+clean_df.to_csv(
+    "clean_df.csv",
+    index=False,
+    encoding="utf-8-sig"
+)
+print(os.path.abspath("clean_df.csv"))
 
 
 # feature columns for lstm
@@ -372,38 +402,15 @@ features = [
 ]
 
 
-l_col_val="label_sepsis_within_6h"
-
-##LSTM##
-
-
-
-trainer = lstm.SepsisTrainer(
-    features=features,
-    label_col=l_col_val,  # or your chosen label
-    seq_len=30,
-    hidden_size=32,
-    num_layers=2,
-    batch_size=32,
-    lr=1e-3,
-    epochs=4,
-)
-
-trainer.prepare_data(clean_df, time_col="charttime")  # or "hour_index_rev" etc.
-trainer.train()
-
-# You can also re-evaluate later:
-
-val_loss, val_auc, val_acc, val_auprc, val_mcc, thr = trainer.evaluate(trainer.val_loader)
-print("Final validation -> Loss:", val_loss, "AUC:", val_auc, "AUPRC:", val_auprc, "MCC:", val_mcc, "thr:", thr, "Acc:", val_acc)
 
 
 def run_groupkfold_cv(
     df,
+    hour,
     trainer_kwargs,
     time_col="charttime",
     group_col="stay_id",
-    n_splits=5,
+    n_splits=10,
 ):
     gkf = GroupKFold(n_splits=n_splits)
     groups = df[group_col].values
@@ -458,7 +465,7 @@ def run_groupkfold_cv(
             "time_min": elapsed_min,
 
         })
-
+    
         print(
             f"Fold {fold} -> "
             f"AUC={val_auc:.4f}, "
@@ -474,6 +481,34 @@ def run_groupkfold_cv(
 
     results = pd.DataFrame(fold_metrics)
 
+    # Save fold-by-fold results
+    results.to_csv(f"{trainer.model_type}_{n_splits}fold_results.csv", index=False)
+
+    # Create summary
+    summary = pd.DataFrame({
+        "Metric": ["AUC", "AUPRC", "MCC", "ACC", "Threshold", "Time (min)"],
+        "Mean": [
+            results["auc"].mean(),
+            results["auprc"].mean(),
+            results["mcc"].mean(),
+            results["acc"].mean(),
+            results["thr"].mean(),
+            results["time_min"].mean()
+        ],
+        "Std": [
+            results["auc"].std(),
+            results["auprc"].std(),
+            results["mcc"].std(),
+            results["acc"].std(),
+            results["thr"].std(),
+            results["time_min"].std()
+        ]
+    })
+
+    # Save summary
+    summary.to_csv(f"{hour}h_{trainer.model_type}_{n_splits}_fold_summary.csv", index=False)
+
+    print("results for:", trainer.model_type)
     print("\n===== CV Summary (mean ± std) =====")
     for col in ["auc", "auprc", "mcc", "acc"]:
         print(f"{col.upper()}: {results[col].mean():.4f} ± {results[col].std():.4f}")
@@ -487,11 +522,140 @@ def run_groupkfold_cv(
 
     return results
 
-cv_results = run_groupkfold_cv(
-    df=clean_df,
+print("describe all features in mimic")
+print(clean_df.shape)
+
+print(clean_df["label_sepsis_within_24h"].value_counts())
+
+print(clean_df["label_sepsis_within_24h"].value_counts(normalize=True))
+# mimic_stats.to_csv(begin_dir / "mimic_feature_stats.csv")
+print("Saved MIMIC statistics.")
+exit()
+
+timeFrames = [6, 8, 12, 24]
+
+for timeframe in timeFrames:
+
+    l_col_val = f"label_sepsis_within_{timeframe}h"
+    model_dir = f"models/{timeframe}h"
+    os.makedirs(model_dir, exist_ok=True)
+
+##LSTM##
+
+
+
+# trainer = lstm.SepsisTrainer(
+#     features=features,
+#     label_col=l_col_val,  # or your chosen label
+#     seq_len=30,
+#     hidden_size=32,
+#     num_layers=2,
+#     batch_size=32,
+#     lr=1e-3,
+#     epochs=4,
+# )
+
+# trainer.prepare_data(clean_df, time_col="charttime")  # or "hour_index_rev" etc.
+# trainer.train()
+
+# # You can also re-evaluate later:
+
+# val_loss, val_auc, val_acc, val_auprc, val_mcc, thr = trainer.evaluate(trainer.val_loader)
+# print("Final validation -> Loss:", val_loss, "AUC:", val_auc, "AUPRC:", val_auprc, "MCC:", val_mcc, "thr:", thr, "Acc:", val_acc)
+
+
+
+
+# cv_results = run_groupkfold_cv(
+#     df=clean_df,
+#     trainer_kwargs=dict(
+#         features=features,
+#         label_col="label_sepsis_within_24h",
+#         seq_len=30,
+#         hidden_size=32,
+#         num_layers=2,
+#         batch_size=32,
+#         lr=1e-3,
+#         epochs=4,
+#         early_stop_patience=2,
+#         early_stop_metric="auprc",
+#     ),
+#     time_col="charttime",
+#     group_col="subject_id",  # or stay_id
+#     n_splits=5,
+# )
+
+
+# ##GRU##
+# # methods=['lstm','gru']
+
+    cv_results_lstm = run_groupkfold_cv(
+        df=clean_df,
+        hour=timeframe,
+        trainer_kwargs=dict(
+            features=features,
+            label_col=l_col_val,
+            seq_len=30,
+            hidden_size=32,
+            num_layers=2,
+            batch_size=32,
+            lr=1e-3,
+            epochs=4,
+            early_stop_patience=2,
+            early_stop_metric="auprc",
+            model_type="lstm",     # 👈 switch here
+            dropout=0.2,
+        ),
+        time_col="charttime",
+        group_col="subject_id",
+        n_splits=10,
+        
+    )
+
+    print("\n===== LSTM CV Summary =====")
+    mean_thr_lstm = cv_results_lstm["thr"].mean()
+
+    joblib.dump(
+        mean_thr_lstm,
+        f"{model_dir}/lstm_threshold.pkl"
+    )
+
+    cv_results_lstm.to_csv(
+    f"{model_dir}/cv_lstm.csv",
+    index=False
+    )
+
+    print(cv_results_lstm.mean(numeric_only=True))
+
+    cv_results_gru = run_groupkfold_cv(
+        df=clean_df,
+        hour=timeframe,
+        trainer_kwargs=dict(
+            features=features,
+            label_col=l_col_val,
+            seq_len=30,
+            hidden_size=32,
+            num_layers=2,
+            batch_size=32,
+            lr=1e-3,
+            epochs=4,
+            early_stop_patience=2,
+            early_stop_metric="auprc",
+            model_type="gru",     # 👈 switch here
+            dropout=0.2,
+        ),
+        time_col="charttime",
+        group_col="subject_id",
+        n_splits=10
+    )
+
+
+
     trainer_kwargs=dict(
         features=features,
-        label_col="label_sepsis_within_24h",
+        label_col=l_col_val,
+        model_type="gru",
+        dropout=0.2,
         seq_len=30,
         hidden_size=32,
         num_layers=2,
@@ -500,19 +664,110 @@ cv_results = run_groupkfold_cv(
         epochs=4,
         early_stop_patience=2,
         early_stop_metric="auprc",
-    ),
-    time_col="charttime",
-    group_col="subject_id",  # or stay_id
-    n_splits=5,
-)
+
+    )
+
+    print("\n===== GRU CV Summary =====")
+    mean_thr_gru = cv_results_gru["thr"].mean()
+
+    joblib.dump(
+        mean_thr_gru,
+        f"{model_dir}/gru_threshold.pkl"
+    )
+
+    cv_results_gru.to_csv(
+    f"{model_dir}/cv_gru.csv",
+    index=False
+    )
+
+    print(cv_results_gru.mean(numeric_only=True))
 
 
-##GRU##
-methods=['lstm','gru']
+    ####XGBOOST####
 
-cv_results_gru = run_groupkfold_cv(
-    df=clean_df,
-    trainer_kwargs=dict(
+    trainer_kwargs = dict(
+        features=features,
+        label_col=l_col_val,
+        model_type="xgb",        
+        early_stopping_rounds=50,
+        tree_params={},          # optional overrides
+    )
+
+    cv_results_xgb = run_groupkfold_cv(
+        df=clean_df,
+        hour=timeframe,
+        trainer_kwargs=trainer_kwargs,
+        group_col="subject_id",
+        n_splits=10,
+    )
+
+    print("\n===== XGBOOST CV Summary =====")
+    mean_thr_xgb = cv_results_xgb["thr"].mean()
+
+    joblib.dump(
+        mean_thr_xgb,
+        f"{model_dir}/xgb_threshold.pkl"
+    )
+
+    cv_results_xgb.to_csv(
+    f"{model_dir}/cv_xgb.csv",
+    index=False
+    )
+
+    print(cv_results_xgb.mean(numeric_only=True))
+
+    ####'lightGBM'####
+
+    trainer_kwargs = dict(
+        features=features,
+        label_col=l_col_val,
+        model_type="lgbm",       
+        early_stopping_rounds=50,
+        tree_params={},          # optional overrides
+    )
+
+    cv_results_gbm = run_groupkfold_cv(
+        df=clean_df,
+        hour=timeframe,
+        trainer_kwargs=trainer_kwargs,
+        group_col="subject_id",
+        n_splits=10,
+    )
+
+
+
+
+
+    print("\n===== LightGBM CV Summary =====")
+    mean_thr_lgbm = cv_results_gbm["thr"].mean()
+
+    joblib.dump(
+        mean_thr_lgbm,
+        f"{model_dir}/gbm_threshold.pkl"
+
+    )
+
+    cv_results_gbm.to_csv(
+    f"{model_dir}/cv_lgbm.csv",
+    index=False
+    )
+
+    print(cv_results_gbm.mean(numeric_only=True))
+
+
+    print('describe heart rate::')
+	
+
+
+    #######NEW LINES ADDED 11.06.2026##########
+    ####################################################
+    # FINAL TRAINING ON FULL MIMIC DATA
+    ####################################################
+
+
+    print("\n===== TRAINING FINAL LSTM =====")
+
+    final_lstm = lstm.SepsisTrainer(
         features=features,
         label_col=l_col_val,
         seq_len=30,
@@ -523,73 +778,127 @@ cv_results_gru = run_groupkfold_cv(
         epochs=4,
         early_stop_patience=2,
         early_stop_metric="auprc",
-        model_type="gru",     # 👈 switch here
+        model_type="lstm",
         dropout=0.2,
-    ),
-    time_col="charttime",
-    group_col="subject_id",
-    n_splits=5,
-)
+    )
+
+    print(f"Final training rows: {len(clean_df):,}")
+    print(f"Final training stays: {clean_df['stay_id'].nunique():,}")
+    print(f"Final training patients: {clean_df['subject_id'].nunique():,}")
+    final_lstm.prepare_data(clean_df, time_col="charttime")
+    final_lstm.train()
+
+    joblib.dump(
+        final_lstm.scaler_X,
+        f"{model_dir}/final_lstm_scaler.pkl"
+    )
+
+    torch.save(
+        final_lstm.model.state_dict(),
+        f"{model_dir}/final_lstm.pt"
+    )
+
+    # Save model weights
+
+
+    print("\n===== TRAINING FINAL GRU =====")
+
+    final_gru = lstm.SepsisTrainer(
+        features=features,
+        label_col=l_col_val,
+        seq_len=30,
+        hidden_size=32,
+        num_layers=2,
+        batch_size=32,
+        lr=1e-3,
+        epochs=4,
+        early_stop_patience=2,
+        early_stop_metric="auprc",
+        model_type="gru",
+        dropout=0.2,
+    )
+
+    final_gru.prepare_data(clean_df, time_col="charttime")
+    final_gru.train()
+
+# Save scaler
+    joblib.dump(
+        final_gru.scaler_X,
+        f"{model_dir}/final_gru_scaler.pkl"
+    )
+
+    # Save GRU weights
+    torch.save(
+        final_gru.model.state_dict(),
+        f"{model_dir}/final_gru.pt"
+    )
+
+    print("Final GRU model saved.")
+
+    joblib.dump(
+        features,
+        f"{model_dir}/features.pkl"
+    )
+
+    metadata = {
+    "horizon": timeframe,
+    "label_col": l_col_val,
+    "features": features,
+    "seq_len": 30,
+    "hidden_size": 32,
+    "num_layers": 2,
+    "dropout": 0.2,
+    "lstm_threshold": float(mean_thr_lstm),
+    "gru_threshold": float(mean_thr_gru),
+    "xgb_threshold": float(mean_thr_xgb),
+    "lgbm_threshold": float(mean_thr_lgbm),
+    }
+
+    joblib.dump(
+        metadata,
+        f"{model_dir}/metadata.pkl"
+    )
+
+    joblib.dump(
+    {
+        "features": features,
+        "timeframe": timeframe,
+        "label": l_col_val
+    },
+    f"{model_dir}/config.pkl"
+    )
+
+    print("Final neural network models saved.")
 
 
 
-trainer_kwargs=dict(
-    features=features,
-    label_col=l_col_val,
-    model_type="gru",
-    dropout=0.2,
-    seq_len=30,
-    hidden_size=32,
-    num_layers=2,
-    batch_size=32,
-    lr=1e-3,
-    epochs=4,
-    early_stop_patience=2,
-    early_stop_metric="auprc",
+    print("\n===== TRAINING FINAL XGBOOST =====")
 
-)
-
-print("\n===== GRU CV Summary =====")
-print(cv_results_gru.mean(numeric_only=True))
+    final_xgb = lstm.SepsisTrainer(
+        features=features,
+        label_col=l_col_val,
+        model_type="xgb",
+    )
 
 
-# ####XGBOOST####
 
-trainer_kwargs = dict(
-    features=features,
-    label_col=l_col_val,
-    model_type="xgb",        # 👈 switch here
-    early_stopping_rounds=50,
-    tree_params={},          # optional overrides
-)
+    final_xgb.train_tree_full(clean_df)
 
-cv_results_xgb = run_groupkfold_cv(
-    df=clean_df,
-    trainer_kwargs=trainer_kwargs,
-    group_col="subject_id",
-    n_splits=5,
-)
+    final_xgb.model.save_model(
+        f"{model_dir}/final_xgb.json"
+    )
 
-print("\n===== XGBOOST CV Summary =====")
-print(cv_results_xgb.mean(numeric_only=True))
+    print("\n===== TRAINING FINAL LIGHTGBM =====")
 
-####'lightGBM'####
+    final_lgbm = lstm.SepsisTrainer(
+        features=features,
+        label_col=l_col_val,
+        model_type="lgbm",
+    )
 
-trainer_kwargs = dict(
-    features=features,
-    label_col=l_col_val,
-    model_type="lgbm",        # 👈 switch here
-    early_stopping_rounds=50,
-    tree_params={},          # optional overrides
-)
+    final_lgbm.train_tree_full(clean_df)
 
-cv_results_gbm = run_groupkfold_cv(
-    df=clean_df,
-    trainer_kwargs=trainer_kwargs,
-    group_col="subject_id",
-    n_splits=5,
-)
-
-
-print("\n===== LightGBM CV Summary =====")
-print(cv_results_gbm.mean(numeric_only=True))
+    joblib.dump(
+        final_lgbm.model,
+        f"{model_dir}/final_lgbm.pkl"
+    )

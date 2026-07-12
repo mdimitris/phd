@@ -30,3 +30,5 @@ newapp/__pycache__/gasesImpute.cpython-312.pyc
 newapp/__pycache__/glucoseImpute.cpython-312.pyc
 newapp/__pycache__/InputData.cpython-312.pyc
 newapp/__pycache__/vitalsImputeNew.cpython-312.pyc
+Νέος φάκελος/24h_xgb_10_fold_summary.csv
+newapp/secondrun

@@ -1,0 +1,17 @@
+Window;Model;Threshold
+24h;XGBoost;0.74
+24h;LightGBM;0.505
+24h;LSTM;0.91
+24h;GRU;0.894
+12h;XGBoost;0.725
+12h;LightGBM;0.355
+12h;LSTM;0.904
+12h;GRU;0.875
+8h;XGBoost;0.71
+8h;LightGBM;0.29
+8h;LSTM;0.855
+8h;GRU;0.855
+6h;XGBoost;0.7
+6h;LightGBM;0.19
+6h;LSTM;0.78
+6h;GRU;0.769

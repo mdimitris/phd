@@ -19,10 +19,11 @@ import InputData
 
 class vitalsImputeNew:
 
-    def __init__(self, vitals,checkingColumns, interval):
+    def __init__(self, vitals,checkingColumns, interval, directory):
         self.vitals = vitals
         self.checkingColumns = checkingColumns
         self.interval = interval
+        self.directory = directory
 
     def set_vitals(self, vitals):
         self.vitals = vitals
@@ -52,7 +53,21 @@ class vitalsImputeNew:
         self.checkingColumns.append('temperature')
         # Create 15-min bins
         self.vitals["charttime"] = dd.to_datetime(self.vitals["charttime"], errors="coerce")
-        self.vitals["time_bin"] =self.vitals["charttime"].dt.floor("15min")
+        self.vitals["time_bin"] =self.vitals["charttime"].dt.floor("120min")
+        print('time bins created for 120min:')
+        group_sizes = (
+            self.vitals.groupby(['stay_id', 'time_bin'])
+            .size()
+        )
+
+        print(group_sizes.describe().compute())
+
+        print(
+            group_sizes.value_counts()
+                    .compute()
+                    .sort_index()
+                    .head(20)
+        )
 
         # Drop unnecessary columns
         cols_to_del = ["race", "hadm_id", "gcs", "dod", "gcs_unable", "gcs_time", "gcs_calc"]
@@ -101,6 +116,7 @@ class vitalsImputeNew:
         })
 
         print("✅ Vitals cleaned and dtypes optimized")
+        return self.vitals
         
         
 
@@ -111,7 +127,7 @@ class vitalsImputeNew:
         """
         # Repartition so all rows of a stay are together
         self.vitals = self.vitals.set_index("stay_id", sorted=False, drop=False)
-        self.vitals = self.vitals.repartition(npartitions=128)
+        self.vitals = self.vitals.repartition(npartitions=64)
         #add temperature in columns for interpolation
         print('Start partition filling')
         
@@ -124,7 +140,7 @@ class vitalsImputeNew:
 
         # Save after interpolation
         print('Start saving filled data to parquets')
-        self.vitals.to_parquet("/root/scripts/newapp/secondrun/vitals_filled.parquet/", write_index=False)
+        self.vitals.to_parquet(self.directory, write_index=False)
         print("💾 Saved interpolated vitals → filled/vitals_filled.parquet")
         # Check missing values only in checkingColumns
         missing_summary = self.vitals[self.checkingColumns].isna().sum().compute()
@@ -135,32 +151,90 @@ class vitalsImputeNew:
 
     @staticmethod
     def fillVitals_partition(df, vital_cols, edge_limit=2):
-    # Make sure charttime is datetime
+
         if "stay_id" in df.index.names:
             df = df.reset_index(level="stay_id", drop=True)
-    
+
         df = df.copy()
-   
-    # Make sure charttime is datetime
+        if df.empty:
+            return df
+
         df['charttime'] = pd.to_datetime(df['charttime'])
 
         # Sort by stay_id and charttime
         df = df.sort_values(['stay_id', 'charttime'])
 
-        # Group by stay_id AND existing 15-min time_bin
-        def _fill_group(g):
+        #group_cols = ['stay_id', 'time_bin']
+        group_cols = ['stay_id','time_bin']
 
-            # Interpolate only interior gaps
-            g[vital_cols] = g[vital_cols].interpolate(method='linear', limit_area='inside')
+        # Interpolate only interior gaps
+        df[vital_cols] = (
+            df.groupby(group_cols)[vital_cols]
+            .transform(
+                lambda x: x.interpolate(
+                    method='linear',
+                    limit_area='inside'
+                )
+            )
+        )
 
-            g['temperature'] = g['temperature'].ffill(limit=8).bfill(limit=8).interpolate(method='linear', limit_area='inside')
-            # Optionally fill small edge gaps
-            if edge_limit is not None and edge_limit > 0:
-                g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).bfill(limit=edge_limit)
-            return g
+        # Temperature special handling
+        df['temperature'] = (
+            df.groupby(group_cols)['temperature']
+            .transform(
+                lambda x: x.interpolate(method='linear',limit_area='inside').ffill(limit=8)                            
+            )
+        )
+
+        # Optionally fill small edge gaps
+        if edge_limit is not None and edge_limit > 0:
+            df[vital_cols] = (
+                df.groupby(group_cols)[vital_cols]
+                .transform(
+                    lambda x: x.interpolate(method='linear',limit_area='inside').ffill(limit=edge_limit)
+                )
+            )
+
+        patient_medians = df.groupby('stay_id')[vital_cols].transform('median')
+        global_medians = df[vital_cols].median()
+
+        df[vital_cols] = (
+            df[vital_cols]
+            .fillna(patient_medians)
+            .fillna(global_medians)
+        )
+
+        return df
+
+    # def fillVitals_partition(df, vital_cols, edge_limit=2):
+    # # Make sure charttime is datetime
+    #     if "stay_id" in df.index.names:
+    #         df = df.reset_index(level="stay_id", drop=True)
+    
+    #     df = df.copy()
+   
+    # # Make sure charttime is datetime
+    #     df['charttime'] = pd.to_datetime(df['charttime'])
+
+    #     # Sort by stay_id and charttime
+    #     df = df.sort_values(['stay_id', 'charttime'])
+
+    #     # Group by stay_id AND existing 15-min time_bin
+    #     def _fill_group(g):
+
+    #         # Interpolate only interior gaps
+    #         g[vital_cols] = g[vital_cols].interpolate(method='linear', limit_area='inside')
+
+    #         g['temperature'] = g['temperature'].ffill(limit=8).interpolate(method='linear', limit_area='inside')
+    #           #g['temperature'] = g['temperature'].ffill(limit=8).bfill(limit=8).interpolate(method='linear', limit_area='inside')
+    #         # Optionally fill small edge gaps
+    #         if edge_limit is not None and edge_limit > 0:
+    #             g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).interpolate(method='linear', limit_area='inside')
+    #             #g[vital_cols] = g[vital_cols].ffill(limit=edge_limit).bfill(limit=edge_limit)
+    #         return g
         
 
-        return df.groupby(['stay_id', 'time_bin'],  group_keys=False).apply(_fill_group)
+    #     return df.groupby(['stay_id', 'time_bin'],  group_keys=False).apply(_fill_group)
     
 
     def prepareVitals(self, run_xgb=True, train_frac=1.0):
@@ -173,7 +247,26 @@ class vitalsImputeNew:
 
         start_time = time.time()
 
-        # 1. Basic cleaning
+
+        thresholds = {
+        "heart_rate": (20, 250),
+        "resp_rate": (2, 80),
+        "temperature": (30, 43),
+        "spo2": (50, 100),
+        "sbp": (40, 300),
+        "dbp": (20, 200),
+        "mbp": (20, 250),
+        "pulse_pressure": (0, 250),
+        "gcs": (3, 15)
+        }
+
+        self.vitals = self.apply_medical_thresholds(
+            self.vitals,
+            thresholds
+        )
+
+
+
         self.cleanVitals()
 
         # 2. Interpolation + edge filling (per stay_id + time_bin)
@@ -181,7 +274,7 @@ class vitalsImputeNew:
 
         # Reload filled dataset (as Dask for consistency)
 
-        df_filled = dd.read_parquet("/root/scripts/newapp/secondrun/vitals_filled.parquet/")
+        df_filled = dd.read_parquet(self.directory)
 
         # #run it for filling temperature more aggressively
         # df_filled = df_filled.map_partitions(
@@ -203,6 +296,34 @@ class vitalsImputeNew:
         print(f"⏱️ Pipeline finished in {elapsed:.1f} seconds")
 
         return df_filled
+    
+
+    def apply_medical_thresholds(self, df, thresholds):
+
+        df_clean = df.copy()
+
+        for col, (lower, upper) in thresholds.items():
+
+            if col not in df_clean.columns:
+                continue
+
+            outliers = (
+                (df_clean[col] < lower) |
+                (df_clean[col] > upper)
+            )
+
+            if hasattr(outliers, "compute"):
+                print(
+                    f"{col}: {outliers.sum().compute()} outliers detected."
+                )
+            else:
+                print(
+                    f"{col}: {outliers.sum()} outliers detected."
+                )
+
+            df_clean[col] = df_clean[col].mask(outliers)
+
+        return df_clean
 
 
     # def prepareVitals(self, run_xgb=True, train_frac=1.0):
@@ -253,7 +374,8 @@ class vitalsImputeNew:
 
         # Create time_bin if not exists
         if 'time_bin' not in df_copy.columns:
-            df_copy['time_bin'] = df_copy['charttime'].dt.floor('15min')
+            df_copy['time_bin'] = df_copy['charttime'].dt.floor('120min')
+        
 
         # Fill using the static method
         df_filled = df_copy.map_partitions(
@@ -300,8 +422,10 @@ class vitalsImputeNew:
                     .transform(lambda x: ((x - x.min()).dt.total_seconds() // (self.interval*3600)).astype(int))
                 )
                 # Forward/backward fill per group
-                pdf['temperature'] = pdf.groupby(['stay_id', 'time_group'])['temperature'] \
-                                        .transform(lambda g: g.ffill().bfill().interpolate(method="linear", limit_direction="both"))
+                patient_median = pdf.groupby('stay_id')['temperature'].transform('median')
+                pdf['temperature'] = pdf.groupby(['stay_id', 'time_group'])['temperature'].\
+                transform(lambda g: g.interpolate(method="linear", limit_direction="both").ffill().fillna(patient_median))
+                                        #.transform(lambda g: g.ffill().bfill().interpolate(method="linear", limit_direction="both"))
                 pdf.drop(columns=['time_group'], inplace=True)
                 return pdf
 

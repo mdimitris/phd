@@ -125,6 +125,114 @@ class xgBoostFill:
         #     model.fit(X_train, y_train)
         #     self.models[target] = (model, features)
         # return self
+    # def _fill_partition(self, pdf: pd.DataFrame):
+
+    #     # Fill missing admission_age
+    #     if "admission_age" in pdf.columns:
+
+    #         patient_age = (
+    #             pdf.groupby("stay_id")["admission_age"]
+    #             .transform("median")
+    #         )
+
+    #         pdf["admission_age"] = (
+    #             pdf["admission_age"]
+    #             .fillna(patient_age)
+    #             .fillna(pdf["admission_age"].median())
+    #         )
+
+
+
+    #     for target in self.target_columns:
+
+    #         if target not in pdf.columns:
+    #             continue
+
+    #         ####################################################
+    #         # Step 1. Simple temporal filling
+    #         ####################################################
+    #         if target in self.short_gap_targets:
+
+    #             pdf[target] = (
+    #                 pdf.groupby("stay_id")[target]
+    #                 .transform(
+    #                     lambda x: x.ffill(limit=10).bfill(limit=10)
+    #                 )
+    #             )
+
+    #         else:
+
+    #             pdf[target] = (
+    #                 pdf.groupby("stay_id")[target]
+    #                 .transform(
+    #                     lambda x:
+    #                         x.ffill(limit=10)
+    #                         .bfill(limit=10)
+    #                         .interpolate(method="linear")
+    #                 )
+    #             )
+
+    #         ####################################################
+    #         # Step 2. ML prediction
+    #         ####################################################
+    #         if target in self.models:
+
+    #             model, features = self.models[target]
+
+    #             missing_idx = pdf.index[pdf[target].isna()]
+
+    #             if len(missing_idx) > 0:
+
+    #                 X_pred = self.clean_dtypes(
+    #                     pdf.loc[missing_idx, features]
+    #                 )
+
+    #                 # Only rows with complete predictors
+    #                 valid_rows = ~X_pred.isna().any(axis=1)
+
+    #                 if valid_rows.any():
+
+    #                     try:
+
+    #                         preds = model.predict(
+    #                             X_pred.loc[valid_rows]
+    #                         )
+
+    #                         pdf.loc[
+    #                             X_pred.loc[valid_rows].index,
+    #                             target
+    #                         ] = preds.astype(pdf[target].dtype)
+
+    #                     except Exception as e:
+
+    #                         print(f"Prediction failed for {target}: {e}")
+
+    #         ####################################################
+    #         # Step 3. Patient median fallback
+    #         ####################################################
+    #         patient_median = (
+    #             pdf.groupby("stay_id")[target]
+    #             .transform("median")
+    #         )
+
+    #         pdf[target] = pdf[target].fillna(patient_median)
+
+    #         ####################################################
+    #         # Step 4. Global median fallback
+    #         ####################################################
+    #         # global_median = pdf[target].median()
+
+    #         # pdf[target] = pdf[target].fillna(global_median)
+
+    #         ####################################################
+    #         # Debug
+    #         ####################################################
+    #         remaining = pdf[target].isna().sum()
+
+    #         if remaining > 0:
+    #             print(f"{target}: {remaining} NaNs remain")
+
+    #     return pdf
 
     def _fill_partition(self, pdf: pd.DataFrame):
         pdf = self.clean_dtypes(pdf)

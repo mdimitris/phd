@@ -1,3 +1,4 @@
+
 import pandas as pd
 import dask.dataframe as dd
 import duckdb
@@ -135,7 +136,7 @@ def mergeDataframes (begin_dir):
 
     print('start merging the parquet files')
 
-    vitals_path=str(begin_dir/"secondrun/vitals_filled.parquet/*.parquet")
+    vitals_path=str(begin_dir/"secondrun/vitals_filled/*.parquet")
     blood_path=str(begin_dir/"secondrun/unfilled/blood.parquet/*.parquet")
     gases_path=str(begin_dir/"secondrun/unfilled/gases.parquet/*.parquet")
     gluc_path=str(begin_dir/"secondrun/unfilled/glucCreat.parquet/*.parquet")

@@ -33,14 +33,14 @@ class Evaluation:
 
 
     # Apply threshold cleaning
-    def apply_medical_thresholds(self, df, thresholds):
-        df_clean = df.copy()
-        for col, (lower, upper) in thresholds.items():
-            if col in df_clean.columns:
-                outliers = (df_clean[col] < lower) | (df_clean[col] > upper)
-                print(f"{col}: {outliers.sum()} outliers detected.")
-                df_clean.loc[outliers, col] = np.nan  # Set outliers to NaN
-        return df_clean
+    # def apply_medical_thresholds(self, df, thresholds):
+    #     df_clean = df.copy()
+    #     for col, (lower, upper) in thresholds.items():
+    #         if col in df_clean.columns:
+    #             outliers = (df_clean[col] < lower) | (df_clean[col] > upper)
+    #             print(f"{col}: {outliers.sum()} outliers detected.")
+    #             df_clean.loc[outliers, col] = np.nan  # Set outliers to NaN
+    #     return df_clean
 
 
     
@@ -107,9 +107,39 @@ class Evaluation:
             df_copy.loc[mask_idx, col] = np.nan
 
         # --- Run imputer
-        
+        print(col)
+        print("masked_indices:", len(masked_indices))
+        print("true_values:", len(true_values))
         df_filled = self.imputer.transform(df_copy)
+        print("After transform:")
+        print(type(df_filled))
+        print(df_filled[col].isna().sum())
 
+        print("\n======================")
+        print("COLUMN:", col)
+        print("TYPE:", type(df_filled))
+
+        print("masked_indices:", len(masked_indices))
+        print("true_values:", len(true_values))
+
+        print("Missing BEFORE:",
+            df_copy[col].isna().sum())
+
+        print("Missing AFTER:",
+            df_filled[col].isna().sum())
+
+        # --- Extract predictions for masked rows
+        preds = df_filled.loc[masked_indices, col].values
+
+        print("Preds length:", len(preds))
+        print("Preds NaNs:", np.isnan(preds).sum())
+
+        true_vals = np.array(true_values)
+
+        print("True NaNs:", np.isnan(true_vals).sum())
+        print("======================\n")
+        if hasattr(df_filled, "compute"):
+            df_filled = df_filled.compute()
         # --- Extract predictions for masked rows
         preds = df_filled.loc[masked_indices, col].values
         true_vals = np.array(true_values)
@@ -138,14 +168,18 @@ class Evaluation:
 
     def evaluate_sparse_with_ml(self, imputer, mask_frac=0.05, n_runs=3):
 
-        from sklearn.metrics import mean_absolute_error
+        from sklearn.metrics import (mean_absolute_error, mean_squared_error, r2_score)
         import numpy as np
         import pandas as pd
 
         results = []
 
         for col in self.columns_to_fill:
-            maes, medians, counts = [], [], []
+            maes = []
+            rmses = []
+            r2s = []
+            medians = []
+            counts = []
 
             for _ in range(n_runs):
                 df_eval = self.data.copy()
@@ -169,14 +203,38 @@ class Evaluation:
                 if valid_mask.sum() == 0:
                     continue
 
-                maes.append(mean_absolute_error(y_true[valid_mask], y_pred[valid_mask]))
-                medians.append(np.median(np.abs(y_true[valid_mask] - y_pred[valid_mask])))
-                counts.append(valid_mask.sum())
+                y_true_valid = y_true[valid_mask]
+                y_pred_valid = y_pred[valid_mask]
+
+                maes.append(
+                    mean_absolute_error(y_true_valid, y_pred_valid)
+                )
+
+                rmses.append(
+                    np.sqrt(
+                        mean_squared_error(y_true_valid, y_pred_valid)
+                    )
+                )
+
+                r2s.append(
+                    r2_score(y_true_valid, y_pred_valid)
+                )
+
+                medians.append(
+                    np.median(
+                        np.abs(y_true_valid - y_pred_valid)
+                    )
+                )
+
+                counts.append(len(y_true_valid))
+
 
             if maes:
                 results.append({
                     "Feature": col,
                     "MAE": np.mean(maes),
+                    "RMSE": np.mean(rmses),
+                    "R2": np.mean(r2s),
                     "MedianAE": np.mean(medians),
                     "EvaluatedPoints": np.sum(counts)
                 })

@@ -3,6 +3,8 @@ import gc
 import pandas as pd
 import dask.dataframe as dd
 import miceforest as mf
+from pathlib import Path
+import joblib
 #from miceforest import builtin_mean_match_schemes as schemes
 
 class bloodImpute:
@@ -11,6 +13,7 @@ class bloodImpute:
         blood_ddf,
         blood_columns,
         sample_size,
+        dataset_name,
         output_folder,
         model_path=None,
         n_output_files=64,
@@ -19,6 +22,7 @@ class bloodImpute:
         self.blood_columns = blood_columns
         self.sample_size = sample_size
         self.output_folder = output_folder
+        self.dataset_name = dataset_name
         self.model_path = model_path or "models/global_blood_kernel.pkl"
         self.kds_global = None
         self.n_output_files = n_output_files
@@ -41,24 +45,38 @@ class bloodImpute:
             c for c in self.blood_columns
             if pd.api.types.is_numeric_dtype(self.blood[c].dtype)
         ]
+
         if not numeric_cols:
-            raise ValueError("No numeric blood columns found for prefill!")
+            raise ValueError("No numeric blood columns found!")
 
         def fill_group(pdf):
+            # Sort chronologically within each ICU stay
+            pdf = pdf.sort_values("charttime").copy()
+
+            # Interpolate and forward-fill only the blood variables
             pdf[numeric_cols] = (
                 pdf[numeric_cols]
+                .interpolate(method="linear", limit_direction="forward")
                 .ffill()
-                .bfill()
-                .interpolate(method="linear", limit_direction="both")
             )
+
             return pdf
 
         if isinstance(self.blood, dd.DataFrame):
             self.blood = self.blood.map_partitions(
-                lambda pdf: pdf.groupby("stay_id", group_keys=False).apply(fill_group)
+                lambda pdf: (
+                    pdf.groupby("stay_id", group_keys=False)
+                    .apply(fill_group)
+                    .reset_index(drop=True)
+                ),
+                meta=self.blood._meta,
             )
         else:
-            self.blood = self.blood.groupby("stay_id", group_keys=False).apply(fill_group).reset_index(drop=True)
+            self.blood = (
+                self.blood.groupby("stay_id", group_keys=False)
+                .apply(fill_group)
+                .reset_index(drop=True)
+            )
 
         print("✅ Prefill complete.")
 
@@ -95,8 +113,13 @@ class bloodImpute:
             # mean_match_candidates=5,
             datasets=1
         )
+        print("miceforest:", mf.__version__)
         self.kds_global.mice(iterations=iterations,n_jobs=os.cpu_count())
         self.kds_global.save_kernel(self.model_path)
+        joblib.dump(
+            self.kds_global,
+            "models/global_blood_kernel.joblib"
+        )
         print(f"✅ Global MICE model trained and saved at {self.model_path}")
         return True
 
@@ -115,19 +138,48 @@ class bloodImpute:
                 print("No MICE model found — save Parquets without imputation.")
 
         # Unique stay_ids
-        unique_stays = self.blood["stay_id"].drop_duplicates().compute().to_numpy()
+        if isinstance(self.blood, dd.DataFrame):
+            unique_stays = (
+                self.blood["stay_id"]
+                .drop_duplicates()
+                .compute()
+                .to_numpy()
+            )
+        else:
+            unique_stays = (
+                self.blood["stay_id"]
+                .drop_duplicates()
+                .to_numpy()
+            )
         unique_stays = [s for s in unique_stays if pd.notna(s)]
         batch_size = max(1, len(unique_stays) // self.n_output_files)
         batch_num = 0
 
         for i in range(0, len(unique_stays), batch_size):
             batch_stays = unique_stays[i:i + batch_size]
-            batch_ddf = self.blood[self.blood["stay_id"].isin(batch_stays)]
-            batch_ddf[self.blood_columns] = batch_ddf[self.blood_columns].map_partitions(
-                lambda df: df.astype("float32")
-            )
+            if isinstance(self.blood, dd.DataFrame):
 
-            batch_df = batch_ddf.compute()
+                batch_ddf = self.blood[self.blood["stay_id"].isin(batch_stays)]
+
+                batch_ddf[self.blood_columns] = (
+                    batch_ddf[self.blood_columns]
+                    .map_partitions(lambda df: df.astype("float32"))
+                )
+
+                batch_df = batch_ddf.compute()
+
+            else:
+
+                batch_df = self.blood[
+                    self.blood["stay_id"].isin(batch_stays)
+                ].copy()
+
+                batch_df[self.blood_columns] = (
+                    batch_df[self.blood_columns]
+                    .astype("float32")
+                )
+
+
             if batch_df.empty:
                 batch_num += 1
                 continue
@@ -164,9 +216,15 @@ class bloodImpute:
         self.prefill()
         print('empty after prefill blodd columns:')
         print(self.blood[self.blood_columns].isna().sum())
-        self.train_global_model()
-        self.apply_global_model()
-        print("Pipeline complete: Prefill + MICE done.")
+        if (self.dataset_name!='eicu'):
+            self.train_global_model()
+            self.apply_global_model()
+            print("Pipeline complete: Prefill + MICE done.")
+        else:
+                    # External validation
+            self.load_global_model(Path("C:/phd-final/phd/models/global_blood_kernel.joblib"))
+            self.apply_global_model()
+            print ('prefill completed.')
 
     def transform(self, df):
         # If using global kernel
@@ -178,3 +236,22 @@ class bloodImpute:
             df_copy[self.blood_columns] = kds.complete_data(0)
 
         return df_copy
+    
+
+    def load_global_model(self,model_path):
+
+        print("Loading trained MICE kernel...")
+        if isinstance(self.blood, dd.DataFrame):
+            self.blood = self.blood.compute()
+        
+        self.kds_global = joblib.load(model_path)
+        print('self kds global diagnostics:')
+        print(type(self.kds_global))
+        print(hasattr(self.kds_global, "impute_new_data"))
+        # use this in newer versions
+
+        # self.kds_global = mf.ImputationKernel(
+        #     self.blood[self.blood_columns],
+        #     random_state=42
+        # )
+        #self.kds_global.load_kernel(model_path)

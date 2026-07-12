@@ -11,6 +11,8 @@ from GRUModel import GRUModel
 import time
 import lightgbm as lgb
 import xgboost as xgb
+import os
+import joblib
 
 class SepsisTrainer:
     def __init__(
@@ -66,6 +68,32 @@ class SepsisTrainer:
 
         self.best_state = None
         self.best_score = -np.inf
+
+    def create_sequences_for_inference(self, df: pd.DataFrame):
+
+        df = df.copy()
+
+        if "gender" in df.columns and df["gender"].dtype == "object":
+            df["gender"] = (
+                df["gender"]
+                .map({"M": 1, "F": 0})
+                .astype("float32")
+            )
+
+        df = df.sort_values(
+            ["stay_id", "charttime"]
+        ).reset_index(drop=True)
+
+        df[self.features] = self.scaler_X.transform(
+            df[self.features]
+        )
+
+        X, y = self._create_sequences_from_df(df)
+
+        return (
+            torch.from_numpy(X).float(),
+            y
+        )
 
     def _create_sequences_from_df(self, df: pd.DataFrame):
         X_seqs, y_seqs = [], []
@@ -319,6 +347,23 @@ class SepsisTrainer:
             self.model.load_state_dict(self.best_state)
 
         print("Training complete (best checkpoint restored).")
+        os.makedirs("models", exist_ok=True)
+
+        if self.model_type in ["lstm", "gru"]:
+            torch.save(
+                {
+                    "model_state_dict": self.model.state_dict(),
+                    "features": self.features,
+                    "label_col": self.label_col,
+                    "seq_len": self.seq_len,
+                    "hidden_size": self.hidden_size,
+                    "num_layers": self.num_layers,
+                },
+                f"models/{self.model_type}_{self.label_col}.pt"
+            )
+
+            
+
 
     def evaluate(self, loader: DataLoader):
         self.model.eval()
@@ -442,7 +487,7 @@ class SepsisTrainer:
                 colsample_bytree=0.8,
                 reg_lambda=1.0,
                 objective="binary",
-                n_jobs=-1,
+                n_jobs=6,
                 random_state=42,
             )
             params.update(self.tree_params)
@@ -451,7 +496,8 @@ class SepsisTrainer:
             model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
-                eval_metric="average_precision",
+                #eval_metric="average_precision",
+                eval_metric="aucpr",
                 callbacks=[lgb.early_stopping(self.early_stopping_rounds, verbose=False)],
             )
             probs = model.predict_proba(X_val)[:, 1]
@@ -514,6 +560,9 @@ class SepsisTrainer:
             mcc_t = matthews_corrcoef(y_val, preds_t)
             if mcc_t > best_mcc:
                 best_mcc, best_thr = mcc_t, float(t)
+        self.model = model
+        os.makedirs("models", exist_ok=True)
+
 
         return dict(
             auc=float(auc),
@@ -528,3 +577,80 @@ class SepsisTrainer:
 
 
 
+    def train_tree_full(self, df: pd.DataFrame):
+
+        df = df.copy()
+
+        if "gender" in df.columns and df["gender"].dtype == "object":
+            df["gender"] = (
+                df["gender"]
+                .map({"M": 1, "F": 0})
+                .astype("float32")
+            )
+
+        df[self.label_col] = df[self.label_col].astype(int)
+
+        needed = [self.label_col] + self.features
+        df = df.dropna(subset=needed).copy()
+
+        X = df[self.features].values
+        y = df[self.label_col].values
+
+        pos = y.sum()
+        neg = len(y) - pos
+
+        self.scale_pos_weight = float(neg / pos)
+
+        if self.model_type == "lgbm":
+
+            params = dict(
+                n_estimators=5000,
+                learning_rate=0.03,
+                num_leaves=63,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_lambda=1.0,
+                objective="binary",
+                n_jobs=6,
+                random_state=42,
+            )
+
+            params.update(self.tree_params)
+
+            self.model = lgb.LGBMClassifier(
+                **params,
+                scale_pos_weight=self.scale_pos_weight
+            )
+
+            self.model.fit(X, y)
+
+        elif self.model_type == "xgb":
+
+            dtrain = xgb.DMatrix(X, label=y)
+
+            params = dict(
+                max_depth=4,
+                eta=0.03,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_lambda=1.0,
+                objective="binary:logistic",
+                eval_metric="aucpr",
+                tree_method="hist",
+                scale_pos_weight=self.scale_pos_weight,
+                seed=42,
+            )
+
+            params.update(self.tree_params)
+
+            self.model = xgb.train(
+                params=params,
+                dtrain=dtrain,
+                num_boost_round=2000,
+                verbose_eval=False,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported model_type={self.model_type}"
+            )
